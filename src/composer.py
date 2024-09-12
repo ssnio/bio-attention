@@ -689,3 +689,80 @@ class Popout_DS(Dataset):
         composites, masks = routine_01(composites, masks, self.noise)
 
         return composites, labels, masks, components, hot_labels
+
+
+class CelebACrop(Dataset):
+    def __init__(self,
+                 dataset: Dataset,
+                 n_iter: int,
+                 hair_dir: str = None,
+                 in_dims: tuple = (3, 178, 178),
+                 padding: int = 19,
+                 noise: float = 0.125,
+                 kind: str = "train",
+                 which: int = 0,):
+        super().__init__()
+        self.dataset = dataset
+        self.n_iter = n_iter
+        self.hair_dir = hair_dir if hair_dir is not None else r"./data/celeba/"
+        self.in_dims = in_dims
+        _, self.h, self.w = self.in_dims
+        self.padding = padding
+        self.noise = noise if kind == "train" else 0.0
+        self.kind = kind  # train, valid, test
+        self.which = which  # 0: all, 1: fblonde, 2: fbrunette, 3: mblonde, 4: mbrunette
+        self.which_names = ["all", "fblonde", "fbrunette", "mblonde", "mbrunette"]
+        self.len_which = len(self.which_names)
+        assert self.which in range(self.len_which), f"which must be between 0 and {self.len_which-1} but got {self.which}!"
+        self.at_list = ['Male', 'Black_Hair', 'Blond_Hair']
+        self.gender_i, self.brunette_i, self.blonde_i =(self.dataset.attr_names.index(x) for x in self.at_list)
+        self.hair_ids = self.get_hair()
+        self.transform = transforms.Compose([
+            transforms.Resize((self.h - 2*self.padding, self.w - 2*self.padding), antialias=True),
+            transforms.RandomHorizontalFlip(),
+            self.nosie_pad if self.kind == "train" else transforms.Pad(self.padding),
+            ])
+
+    def get_hair(self):
+        if self.hair_dir and os.path.exists(os.path.join(self.hair_dir, f"{self.kind}_hair_ids.pt")):
+            print(f'Loading {self.kind}_hair_ids.pt from file!')
+            return torch.load(os.path.join(self.hair_dir, f"{self.kind}_hair_ids.pt"))
+        else:
+            print(f'Creating {self.kind}_hair_ids.pt file!')
+            hair_ids = [[], [], [], [], []]  # [all, fblonde, fbrunette, mblonde, mbrunette]
+            for i, (_, y) in enumerate(self.dataset):
+                if y[self.blonde_i] == 1 or y[self.brunette_i] == 1:
+                    hair_ids[0].append(i)
+                    if self.kind == "train" and y[self.gender_i] == 1:  # since the dataset is not balanced
+                        hair_ids[0].append(i)
+                    g, b = y[self.gender_i], y[self.brunette_i]
+                    hair_ids[1+b+2*g].append(i)
+        if self.kind == "train":
+            random.shuffle(hair_ids[0])  # shuffle the training set only # # # # 
+        for i, n in enumerate(self.which_names):
+            print(f"{n}: {len(hair_ids[i])}")
+        torch.save(hair_ids, os.path.join(self.hair_dir, f"{self.kind}_hair_ids.pt"))
+        print(f'{self.kind}_hair_ids.pt saved to file!')
+        return hair_ids
+
+    def nosie_pad(self, x: torch.Tensor):
+        y = torch.rand(x.size(0), self.h, self.w)
+        h, w = x.shape[-2:]
+        pad_h = torch.randint(0, self.h - h, (1,)).item() if h < self.h else 0
+        pad_w = torch.randint(0, self.w - w, (1,)).item() if w < self.w else 0
+        y[:, pad_h:pad_h+h, pad_w:pad_w+w] = x
+        return y
+
+    def __len__(self):
+        return len(self.hair_ids[self.which])
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[self.hair_ids[self.which][idx]]
+        x = x[:, 20:-20, :]
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        composites[:] = self.transform(x)
+        labels = torch.zeros(self.n_iter).long()
+        labels[:] = y[self.gender_i]
+        composites += self.noise * torch.rand_like(composites)
+        composites = torch.clamp(composites, 0.0, 1.0)
+        return composites, labels, 0, 0, 0
