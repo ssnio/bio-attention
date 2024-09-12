@@ -2,6 +2,7 @@
 workshop.py
 results/*
 data/MNIST
+data/celeba
 logs/*
 .DS_Store
 */.DS_Store
