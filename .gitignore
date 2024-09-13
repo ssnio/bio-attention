@@ -10,6 +10,7 @@ logs/*
 .vscode
 .idea/
 *.log
+*.sh
 
 
 # Byte-compiled / optimized / DLL files
