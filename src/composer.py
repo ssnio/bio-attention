@@ -60,6 +60,29 @@ def bezier_generator(p: torch.Tensor, t: torch.Tensor):
     return c
 
 
+def center_of_mass(x: torch.tensor):
+    """
+    :param x: 2-3D tensor
+    :return: center of mass of the tensor
+    """
+    assert x.ndim == 2 or (x.ndim == 3 and x.size(0) == 1)
+    d = 10  # min distance from the edges (boundaries)
+    h, w = x.shape[-2:]
+    eps = 1e-9
+    x = x.squeeze()
+    normalizer = torch.sum(x) + eps
+    grids = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+    c = [int(torch.sum(x * grids[dir].float()).item() / normalizer) for dir in range(2)]
+    return [max(min(c[0], h - d), d), max(min(c[1], w - d), d)]
+
+
+def coord_to_points(x: torch.tensor, i: int, j: int, k: int):
+    *_, h, w = x.shape
+    p = torch.zeros_like(x)
+    p[:, max(i-k, 0):min(h, i+k), max(j-k, 0):min(w, j+k)] = 1.0
+    return p
+
+
 def routine_01(composites: torch.Tensor, masks: torch.Tensor, noise: float = 0.0):
     # adding noise and clamping 
     composites += torch.rand(1) * noise * torch.rand_like(composites)
