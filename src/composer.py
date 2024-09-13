@@ -87,6 +87,7 @@ def routine_01(composites: torch.Tensor, masks: torch.Tensor, noise: float = 0.0
     # adding noise and clamping 
     composites += torch.rand(1) * noise * torch.rand_like(composites)
     composites = torch.clamp(composites, 0.0, 1.0)
+    masks = torch.clamp(masks, 0.0, 1.0)
     masks = 2.0 * (masks - 0.5)
     return composites, masks
 
