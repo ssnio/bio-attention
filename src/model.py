@@ -206,6 +206,7 @@ class AttentionModel(torch.nn.Module):
                  task_weight: bool = True,  # whether to weight the deconvolutional layers with task embedding
                  task_bias: bool = False,  # whether to bias the deconvolutional layers with task embedding
                  task_funs: Callable = None,  # activation function for task embedding
+                 rnn_to_fc: bool = False,  # whether to use RNN layers or MLP layers
                  ):
         super().__init__()
         self.normalize = normalize
@@ -241,9 +242,10 @@ class AttentionModel(torch.nn.Module):
         self.task_bias = task_bias if self.n_tasks > 1 else False
         self.task_funs = task_funs if self.n_tasks > 1 else None
         self.conv_dims = [self.in_dims]
+        self.rnn_to_fc = rnn_to_fc
         self.conv_blocks = torch.nn.ModuleList()
-        self.frnn_blocks = torch.nn.ModuleList()
-        self.brnn_blocks = torch.nn.ModuleList()
+        self.frnn_blocks = torch.nn.ModuleList() if len(self.rnn_dims) > 1 else None
+        self.brnn_blocks = torch.nn.ModuleList() if len(self.rnn_dims) > 1 else None
         self.deconv_blocks = torch.nn.ModuleList()
         self.embed_blocks_a = torch.nn.ModuleList() if self.task_weight else None
         self.embed_blocks_b = torch.nn.ModuleList() if self.task_bias else None
@@ -267,19 +269,33 @@ class AttentionModel(torch.nn.Module):
         self.flat_dim = self.conv_dims[-1][0] * self.conv_dims[-1][1] * self.conv_dims[-1][2]
         self.conv_frnn = torch.nn.Linear(self.flat_dim, self.rnn_dims[0])
         for i in range(self.n_rnns):
-            self.frnn_blocks.append(MonoSeqRNN(self.rnn_dims[i], 
-                                            self.rnn_dims[i+1], 
-                                            self.rnn_bias[i], 
-                                            self.rnn_dropouts[i], 
-                                            self.rnn_funs[i]))
+            if self.rnn_to_fc:
+                self.frnn_blocks.append(VanillaLayer(self.rnn_dims[i],
+                                                self.rnn_dims[i+1],
+                                                self.rnn_bias[i],
+                                                self.rnn_dropouts[i],
+                                                self.rnn_funs[i]))
+            else:
+                self.frnn_blocks.append(MonoSeqRNN(self.rnn_dims[i], 
+                                                self.rnn_dims[i+1], 
+                                                self.rnn_bias[i], 
+                                                self.rnn_dropouts[i], 
+                                                self.rnn_funs[i]))
         self.fc_out = torch.nn.Linear(self.rnn_dims[-1], self.out_dims)
         self.fc_in = torch.nn.Linear(self.task_dim + self.out_dims, self.rnn_dims[-1])
         for i in range(1, len(self.rnn_dims)):
-            self.brnn_blocks.append(MonoSeqRNN(self.rnn_dims[-i] * 2, 
+            if self.rnn_to_fc:
+                self.brnn_blocks.append(VanillaLayer(self.rnn_dims[-i] * 2, 
                                                 self.rnn_dims[-i-1], 
                                                 self.rnn_bias[-i], 
                                                 self.rnn_dropouts[-i], 
                                                 self.rnn_funs[-i]))
+            else:
+                self.brnn_blocks.append(MonoSeqRNN(self.rnn_dims[-i] * 2, 
+                                                    self.rnn_dims[-i-1], 
+                                                    self.rnn_bias[-i], 
+                                                    self.rnn_dropouts[-i], 
+                                                    self.rnn_funs[-i]))
         self.brnn_deconv = torch.nn.Linear(self.rnn_dims[0], self.flat_dim)
         for i in range(1, len(self.channels)):
             if self.task_weight:
@@ -367,7 +383,7 @@ class AttentionModel(torch.nn.Module):
 
             # forward recurrent layers
             for i in range(self.n_rnns):
-                h = self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+                h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
                 self.hstates[f"f_state{i}"] = h
                 act_[self.n_convs + i + 1][r] = h
 
@@ -381,7 +397,7 @@ class AttentionModel(torch.nn.Module):
             h = self.fc_in(h)
             for i in range(self.n_rnns):
                 h = torch.cat([h, act_[-i-1][r]], dim=1)
-                h = self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
+                h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
                 self.hstates[f"b_state{i}"] = h
             
             # backward linear layer
@@ -436,7 +452,7 @@ class AttentionModel(torch.nn.Module):
 
         # forward recurrent layers
         for i in range(self.n_rnns):
-            h = self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+            h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
             self.hstates[f"f_state{i}"] = h
             act_[self.n_convs + i + 1] = h
 
@@ -473,7 +489,7 @@ class AttentionModel(torch.nn.Module):
 
         # forward recurrent layers
         for i in range(self.n_rnns):
-            h = self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+            h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
             self.hstates[f"f_state{i}"] = h
             act_.append(h)
 
@@ -486,7 +502,7 @@ class AttentionModel(torch.nn.Module):
         h = self.fc_in(h)
         for i in range(self.n_rnns):
             h = torch.cat([h, act_[-i-1]], dim=1)
-            h = self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
+            h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
             self.hstates[f"b_state{i}"] = h
         
         # backward linear layer
