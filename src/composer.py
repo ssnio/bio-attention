@@ -162,6 +162,7 @@ class IOR_DS(Dataset):
         masks = torch.zeros(self.n_digits, 1, self.h, self.w)
         labels = torch.zeros(self.n_digits).long()
         hot_labels = 0
+        composites += (0.5 * torch.rand(1, 3, 1, 1))
         
         # composing while avoiding overlap
         for i in range(self.n_digits):
@@ -174,7 +175,7 @@ class IOR_DS(Dataset):
                 j += 1
             rgb = torch.rand(3, 1, 1)  # random.choice(self.rgbs)
             rgb /= rgb.max()
-            composites[:] += (x * rgb)
+            composites[:] = (1.0 - x) * composites + x * rgb
             components[i] = x
             labels[i] = y
             masks[i] = x
@@ -310,6 +311,7 @@ class Cue_DS(Dataset):
         labels = torch.zeros(self.n_iter).long()
         hot_labels = 0
         y_list = []
+        composites += (0.5 * torch.rand(1, 3, 1, 1))
 
         # composing while avoiding overlap
         for i in range(self.n_digits):
@@ -326,11 +328,11 @@ class Cue_DS(Dataset):
         target_id = random.choice(range(self.n_digits))
         target = components[target_id]
         fixpoint = self.fix_pointer.fix_points(target)
-        composites[:self.fixate] = fixpoint
+        composites[:self.fixate] = fixpoint + (1.0 - fixpoint) * composites[:self.fixate]
         masks[:self.fixate] = fixpoint
         rgb = torch.rand(self.n_digits, 3, 1, 1)
         rgb /= rgb.max(dim=1, keepdims=True).values
-        composites[self.fixate:] = (components * rgb).sum(0)
+        composites[self.fixate:] = (components * rgb).sum(0) + (1.0 - components.sum(0)) * composites[self.fixate:]
         masks[self.fixate:] = target
         labels[:] = y_list[target_id]
         
@@ -640,6 +642,8 @@ class Tracking_DS(Dataset):
             x, y = self.get_random_digit()
             composites = self.put_digits_on_curve(composites, x, rgbs[i], *positions[i])
 
+        where_digits = composites * (composites > 0.0)
+        composites = 0.5 * (1.0 - where_digits) * torch.rand(1, 3, 1, 1) + where_digits
         # adding noise and clamping 
         composites, masks = routine_01(composites, masks, self.noise)
 
@@ -695,7 +699,7 @@ class Popout_DS(Dataset):
         rgbs = torch.rand(2, 3, 1, 1)
         labels[:] = y
         hot_labels = 0
-        b_rgb = torch.rand(3, 1, 1) * 0.5
+        b_rgb = 0.5 * torch.rand(3, 1, 1)
 
         t = random.choice(self.index_pos)
         pos_ij = self.digit_pos[t]
