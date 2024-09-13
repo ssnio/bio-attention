@@ -61,7 +61,7 @@ class AttentionTrain:
         self.max_grad_norm = 10.0
 
 
-    def train(self, n_epochs: int, device, verbose: bool = False):
+    def train(self, n_epochs: int, device, verbose: bool = False, mask_mp: float = 0.0):
         """
         One batch at a time by One training
         """
@@ -91,8 +91,9 @@ class AttentionTrain:
                         loss_2 = mse_loss(p_m[:, loss_s[1]], m[:, loss_s[1]]) if m.ndim > 1 else torch.tensor([0.0]).to(device)
                         loss_3 = cross_entropy(p_yy, y[:, -1], class_weights) if y.ndim > 1 else torch.tensor([0.0]).to(device)
 
-                    loss = 0.0
-
+                    # mask loss (minimize the area of attention)
+                    loss = (mask_mp * ((p_m[:, -1] + 1.0)/2.0).mean()) if mask_mp > 0.0 else 0.0
+                    
                     # cross-entropy for the sequence
                     loss = loss + loss_w[0] * loss_1 if loss_w[0] > 0 else loss
                     self.loss_records[j][0].append(loss_1.item() + 1e-6)
