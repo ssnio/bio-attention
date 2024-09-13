@@ -20,6 +20,44 @@ def makenorm(kind: str, n_channels: int, trs: bool = False):
         raise ValueError(f"Invalid normalization layer: {kind}!")
 
 
+class VanillaLayer(torch.nn.Module):
+    def __init__(self, 
+                 in_dim: int, 
+                 out_dim: int, 
+                 bias: bool = False,
+                 dropout: float = 0.0,
+                 nonlinearity: Callable = torch.relu):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.bias = bias
+        self.dropout = torch.nn.Dropout(dropout) if dropout > 0.0 else None
+        self.nonlinearity = nonlinearity  if nonlinearity is not None else torch.nn.Identity()
+        self.layer = torch.nn.Linear(in_dim, out_dim, bias=bias)
+
+    def __call__(self, x: torch.Tensor):
+        return self.forward(x)
+
+    def __repr__(self) -> str:
+        try:
+            nonlinearity = self.nonlinearity.__name__
+        except AttributeError:
+            nonlinearity = "unknown"
+        return f"VanillaLayer(in_dim={self.in_dim}, out_dim={self.out_dim}, nonlinearity={nonlinearity}, bias={self.bias})"
+
+    def __str__(self) -> str:
+        try:
+            nonlinearity = self.nonlinearity.__name__
+        except AttributeError:
+            nonlinearity = "unknown"
+        return f"VanillaLayer(in_dim={self.in_dim}, out_dim={self.out_dim}, nonlinearity={nonlinearity}, bias={self.bias})"
+
+    def forward(self, x: torch.Tensor):
+        h = self.layer(x)
+        h = self.dropout(h) if self.dropout is not None else h
+        return self.nonlinearity(h)
+
+
 class MonoSeqRNN(torch.nn.Module):
     def __init__(self, 
                  in_dim: int, 
