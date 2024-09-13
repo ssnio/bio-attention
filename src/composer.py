@@ -1,7 +1,7 @@
 # # built-in modules
 import random
 import os
-from typing import Callable
+from typing import Callable, Union
 import math
 # # Torch modules
 import torch
