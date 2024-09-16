@@ -205,9 +205,11 @@ class AttentionModel(torch.nn.Module):
                  norm_std: float = None,  # std for normalization
                  task_layers: int = -1,  # number of layers to use task embedding for
                  task_weight: bool = True,  # whether to weight the deconvolutional layers with task embedding
-                 task_bias: bool = False,  # whether to bias the deconvolutional layers with task embedding
+                 task_bias: bool = True,  # whether to bias the deconvolutional layers with task embedding
                  task_funs: Callable = None,  # activation function for task embedding
                  rnn_to_fc: bool = False,  # whether to use RNN layers or MLP layers
+                 out_ext: bool = False,  # whether the output is extended or the same size as out_dim
+                 rnn_cat: bool = False,  # whether to concatenate the forward and backward RNN outputs
                  ):
         super().__init__()
         self.normalize = normalize
@@ -245,12 +247,16 @@ class AttentionModel(torch.nn.Module):
         self.task_funs = task_funs if self.n_tasks > 1 else None
         self.conv_dims = [self.in_dims]
         self.rnn_to_fc = rnn_to_fc
+        self.out_ext = out_ext
+        self.rnn_cat = rnn_cat
+        self.bridge_norm = "layer"
         self.conv_blocks = torch.nn.ModuleList()
         self.frnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
         self.brnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
         self.deconv_blocks = torch.nn.ModuleList()
         self.embed_blocks_a = torch.nn.ModuleList() if self.task_weight else None
         self.embed_blocks_b = torch.nn.ModuleList() if self.task_bias else None
+        self.bridges = torch.nn.ModuleList()
         for i in range(self.n_convs):
             self.conv_blocks.append(ConvBlock(self.channels[i], 
                                               self.channels[i+1], 
@@ -283,17 +289,17 @@ class AttentionModel(torch.nn.Module):
                                                 self.rnn_bias[i], 
                                                 self.rnn_dropouts[i], 
                                                 self.rnn_funs[i]))
-        self.fc_out = torch.nn.Linear(self.rnn_dims[-1], self.out_dims)
-        self.fc_in = torch.nn.Linear(self.task_dim + self.out_dims, self.rnn_dims[-1])
+        self.fc_out = torch.nn.Linear(self.rnn_dims[-1], self.out_dims * (2 if self.out_ext else 1))
+        self.fc_in = torch.nn.Linear(self.task_dim + self.out_dims * (2 if self.out_ext else 1), self.rnn_dims[-1])
         for i in range(1, self.n_rnns + 1):
             if self.rnn_to_fc:
-                self.brnn_blocks.append(VanillaLayer(self.rnn_dims[-i] * 2, 
+                self.brnn_blocks.append(VanillaLayer(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), 
                                                 self.rnn_dims[-i-1], 
                                                 self.rnn_bias[-i], 
                                                 self.rnn_dropouts[-i], 
                                                 self.rnn_funs[-i]))
             else:
-                self.brnn_blocks.append(MonoSeqRNN(self.rnn_dims[-i] * 2, 
+                self.brnn_blocks.append(MonoSeqRNN(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), 
                                                     self.rnn_dims[-i-1], 
                                                     self.rnn_bias[-i], 
                                                     self.rnn_dropouts[-i], 
@@ -303,6 +309,7 @@ class AttentionModel(torch.nn.Module):
             if (i - 1) in self.task_layers:
                 if self.task_weight:
                     self.embed_blocks_a.append(torch.torch.nn.Embedding(self.n_tasks, 2 * self.channels[-i]))
+                    torch.nn.init.xavier_normal_(self.embed_blocks_a[-1].weight)
                     if self.task_bias:
                         self.embed_blocks_b.append(torch.torch.nn.Embedding(self.n_tasks, 2 * self.channels[-i]))
                         torch.nn.init.zeros_(self.embed_blocks_b[-1].weight)
@@ -315,14 +322,13 @@ class AttentionModel(torch.nn.Module):
                                                   self.conv_bias[-i],
                                                   self.deconv_norms[-i],
                                                   self.conv_dropouts[-i],
-                                                  self.deconv_funs[-i], 
+                                                  self.deconv_funs[-i] if i < self.n_convs else torch.nn.Tanh(), 
                                                   ))
+            if i < self.n_convs:
+                self.bridges.append(torch.nn.Sequential(makenorm(self.bridge_norm, self.channels[-i-1]), torch.nn.Tanh()))
         # pre-allocation
         self.masks = {}
         self.hstates = {}
-
-    def embed_task(self, h: torch.Tensor, t: torch.Tensor, th: torch.Tensor):
-        return torch.cat([h, th], 1) if self.n_tasks > 1 else h
 
     def soft_attention(self, x: torch.Tensor, i: int):
         m = self.masks[f"mask_{i}"]
@@ -392,14 +398,14 @@ class AttentionModel(torch.nn.Module):
 
             # output and input prompt layer
             h = self.fc_out(h)
-            labels_[r] = h
+            labels_[r] = h[:, :self.out_dims] if self.out_ext else h
             h = h if y is None else torch.cat([y[r], h[:, self.out_dims:]], dim=1)
-            h = h if t is None else self.embed_task(h, t, th)
+            h = h if t is None else torch.cat([h, th], 1) if self.n_tasks > 1 else h
 
             # backward recurrent layers
             h = self.fc_in(h)
             for i in range(self.n_rnns):
-                h = torch.cat([h, act_[-i-1][r]], dim=1)
+                h = torch.cat([h, act_[-i-1][r]], dim=1) if self.rnn_cat else h
                 h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
                 self.hstates[f"b_state{i}"] = h
             
@@ -416,7 +422,7 @@ class AttentionModel(torch.nn.Module):
                     b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                     h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
                 h = self.deconv_blocks[i](h)
-                self.masks[f"mask_{self.n_convs - i - 1}"] = h
+                self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h) if i < self.n_convs - 1 else h
             masks_[r] = self.masks["mask_0"]
 
         # post-processing
@@ -460,7 +466,8 @@ class AttentionModel(torch.nn.Module):
             act_[self.n_convs + i + 1] = h
 
         # output
-        h = labels_ = self.fc_out(h)
+        h = self.fc_out(h)
+        labels_ = h[:, :self.out_dims] if self.out_ext else h
         
         return labels_, act_
 
@@ -497,14 +504,15 @@ class AttentionModel(torch.nn.Module):
             act_.append(h)
 
         # output and input prompt layer
-        h = labels_ = self.fc_out(h)
+        h = self.fc_out(h)
+        labels_ = h[:, :self.out_dims] if self.out_ext else h
         h = h if y is None else torch.cat([y, h[:, self.out_dims:]], dim=1)
-        h = h if t is None else self.embed_task(h, t, th)
+        h = h if t is None else torch.cat([h, th], 1) if self.n_tasks > 1 else h
 
         # backward recurrent layers
         h = self.fc_in(h)
         for i in range(self.n_rnns):
-            h = torch.cat([h, act_[-i-1]], dim=1)
+            h = torch.cat([h, act_[-i-1]], dim=1) if self.rnn_cat else h
             h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
             self.hstates[f"b_state{i}"] = h
         
@@ -521,7 +529,7 @@ class AttentionModel(torch.nn.Module):
                 b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                 h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
             h = self.deconv_blocks[i](h)
-            self.masks[f"mask_{self.n_convs - i - 1}"] = h
+            self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h) if i < self.n_convs - 1 else h
         masks_ = self.masks["mask_0"]
         
         return masks_, labels_, act_
