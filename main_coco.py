@@ -46,7 +46,7 @@ model_params = {
     "conv_norms": (None, *("layer" for _ in range(7))),  # normalization in the encoder
     "conv_dropouts": 0.0,  # dropout in the encoder
     "conv_funs": torch.nn.GELU(),  # activation function in the encoder
-    "deconv_funs": torch.nn.Tanh(),  # activation function in the decoder
+    "deconv_funs": torch.nn.GELU(),  # activation function in the decoder
     "deconv_norms": (None, *("layer" for _ in range(7))),  # normalization in the decoder
     "pools": 2,  # pooling in the encoder
     "rnn_dims": (256, ),  # dimensions of the RNN (First value is not RNN but FC)
@@ -58,6 +58,9 @@ model_params = {
     "task_weight": True,  # use tasks embeddings for the decoder channels (multiplicative)
     "task_bias": True,  # use tasks embeddings for the decoder channels  (additive)
     "task_funs": torch.nn.Tanh(),  # activation function for the tasks embeddings
+    "rnn_to_fc": False,  # use FC instead of RNN
+    "out_ext": False,
+    "rnn_cat": False,
 }
 
 tasks = OrderedDict({})
