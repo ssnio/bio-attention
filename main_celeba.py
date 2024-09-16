@@ -28,7 +28,7 @@ parser.add_argument('-l2', type=float, default=1e-3)
 parser.add_argument('-exase', type=str, default="default")
 parser.add_argument('-verbose', type=int, default=1)
 argus = parser.parse_args()
-
+data_path = r"../attention/data"
 train_params = {
     "n_epochs": argus.n_epochs,
     "batch_size": argus.batch_size,
@@ -45,7 +45,7 @@ model_params = {
     "out_dims": 2,  # output dimensions (number of classes)
     "normalize": True,  # normalize input images
     "softness": 0.5,  # softness of the attention (scale)
-    "channels": (3, 4, 8, 16, 16, 16, 16),  # channels in the encoder
+    "channels": (3, 4, 8, 16, 16, 16),  # channels in the encoder
     "residuals": False,  # use residuals in the encoder
     "kernels": 3,  # kernel size
     "strides": 1,  # stride
@@ -56,8 +56,8 @@ model_params = {
     "conv_funs": torch.nn.ReLU(),  # activation function in the encoder
     "deconv_funs": torch.nn.Tanh(),  # activation function in the decoder
     "deconv_norms": None,  # normalization in the decoder
-    "pools": (2, 2, 2, 2, 2, 2),  # pooling in the encoder
-    "rnn_dims": (16, ),  # dimensions of the RNN (First value is not RNN but FC)
+    "pools": (4, 2, 2, 2, 2),  # pooling in the encoder
+    "rnn_dims": (16, 8),  # dimensions of the RNN (First value is not RNN but FC)
     "rnn_bias": True,  # bias in the RNN
     "rnn_dropouts": 0.0,  # dropout in the RNN
     "rnn_funs": torch.nn.ReLU(),  # activation function in the RNN
@@ -65,6 +65,7 @@ model_params = {
     "task_weight": False,  # use tasks embeddings for the decoder channels (multiplicative)
     "task_bias": False,  # use tasks embeddings for the decoder channels  (additive)
     "task_funs": None,  # activation function for the tasks embeddings
+    "rnn_to_fc": True,  # Whether to use the RNN layers or FC
 }
 
 # # tasks include the composer, key, params, datasets, dataloaders, loss weights, loss slices, and has prompt
@@ -93,9 +94,9 @@ for i, k in enumerate(tasks):
 (argus.verbose == 1) and logger.info(f"tasks\n {pformat(tasks)}")
 
 # datasets and dataloaders
-train_ds = datasets.CelebA(root=r"./data", split='train', transform=transforms.ToTensor())
-valid_ds = datasets.CelebA(root=r"./data", split='valid', transform=transforms.ToTensor())
-test_ds = datasets.CelebA(root=r"./data", split='test', transform=transforms.ToTensor())
+train_ds = datasets.CelebA(root=data_path, split='train', transform=transforms.ToTensor())
+valid_ds = datasets.CelebA(root=data_path, split='valid', transform=transforms.ToTensor())
+test_ds = datasets.CelebA(root=data_path, split='test', transform=transforms.ToTensor())
 DeVice, num_workers, pin_memory = get_device()
 for o in tasks:
     tasks[o]["datasets"].append(tasks[o]["composer"](train_ds, **tasks[o]["params"], kind="train"))
