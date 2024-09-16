@@ -203,6 +203,7 @@ class AttentionModel(torch.nn.Module):
                  n_tasks: int,  # number of tasks
                  norm_mean: float = None,  # mean for normalization
                  norm_std: float = None,  # std for normalization
+                 task_layers: int = -1,  # number of layers to use task embedding for
                  task_weight: bool = True,  # whether to weight the deconvolutional layers with task embedding
                  task_bias: bool = False,  # whether to bias the deconvolutional layers with task embedding
                  task_funs: Callable = None,  # activation function for task embedding
@@ -238,14 +239,15 @@ class AttentionModel(torch.nn.Module):
         self.task_dim = self.n_tasks if self.n_tasks > 1 else 0
         self.norm_mean = [0.485, 0.456, 0.406] if norm_mean is None else norm_mean
         self.norm_std = [0.229, 0.224, 0.225] if norm_std is None else norm_std
+        self.task_layers = list(range(self.n_convs)) if task_layers == -1 else list(range(task_layers))
         self.task_weight = task_weight if self.n_tasks > 1 else False
         self.task_bias = task_bias if self.n_tasks > 1 else False
         self.task_funs = task_funs if self.n_tasks > 1 else None
         self.conv_dims = [self.in_dims]
         self.rnn_to_fc = rnn_to_fc
         self.conv_blocks = torch.nn.ModuleList()
-        self.frnn_blocks = torch.nn.ModuleList() if len(self.rnn_dims) > 1 else None
-        self.brnn_blocks = torch.nn.ModuleList() if len(self.rnn_dims) > 1 else None
+        self.frnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
+        self.brnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
         self.deconv_blocks = torch.nn.ModuleList()
         self.embed_blocks_a = torch.nn.ModuleList() if self.task_weight else None
         self.embed_blocks_b = torch.nn.ModuleList() if self.task_bias else None
@@ -283,7 +285,7 @@ class AttentionModel(torch.nn.Module):
                                                 self.rnn_funs[i]))
         self.fc_out = torch.nn.Linear(self.rnn_dims[-1], self.out_dims)
         self.fc_in = torch.nn.Linear(self.task_dim + self.out_dims, self.rnn_dims[-1])
-        for i in range(1, len(self.rnn_dims)):
+        for i in range(1, self.n_rnns + 1):
             if self.rnn_to_fc:
                 self.brnn_blocks.append(VanillaLayer(self.rnn_dims[-i] * 2, 
                                                 self.rnn_dims[-i-1], 
@@ -297,12 +299,13 @@ class AttentionModel(torch.nn.Module):
                                                     self.rnn_dropouts[-i], 
                                                     self.rnn_funs[-i]))
         self.brnn_deconv = torch.nn.Linear(self.rnn_dims[0], self.flat_dim)
-        for i in range(1, len(self.channels)):
-            if self.task_weight:
-                self.embed_blocks_a.append(torch.torch.nn.Embedding(self.n_tasks, 2 * self.channels[-i]))
-                if self.task_bias:
-                    self.embed_blocks_b.append(torch.torch.nn.Embedding(self.n_tasks, 2 * self.channels[-i]))
-                    torch.nn.init.zeros_(self.embed_blocks_b[-1].weight)
+        for i in range(1, self.n_convs + 1):
+            if (i - 1) in self.task_layers:
+                if self.task_weight:
+                    self.embed_blocks_a.append(torch.torch.nn.Embedding(self.n_tasks, 2 * self.channels[-i]))
+                    if self.task_bias:
+                        self.embed_blocks_b.append(torch.torch.nn.Embedding(self.n_tasks, 2 * self.channels[-i]))
+                        torch.nn.init.zeros_(self.embed_blocks_b[-1].weight)
             self.deconv_blocks.append(DeConvBlock(self.pools[-i],
                                                   2 * self.channels[-i], 
                                                   self.channels[-i-1] if i < self.n_convs else 1,
@@ -408,7 +411,7 @@ class AttentionModel(torch.nn.Module):
             for i in range(self.n_convs):
                 f = act_[self.n_convs - i - 1][r]
                 h = torch.cat([h, f], 1)
-                if t is not None:
+                if (t is not None) and (i in self.task_layers):
                     a = self.embed_blocks_a[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_weight else 1.0
                     b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                     h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
@@ -513,7 +516,7 @@ class AttentionModel(torch.nn.Module):
         for i in range(self.n_convs):
             f = act_[self.n_convs - i - 1]
             h = torch.cat([h, f], 1)
-            if t is not None:
+            if (t is not None) and (i in self.task_layers):
                 a = self.embed_blocks_a[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_weight else 1.0
                 b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                 h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
