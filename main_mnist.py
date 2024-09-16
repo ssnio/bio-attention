@@ -30,7 +30,7 @@ parser.add_argument('-l2', type=float, default=1e-6)
 parser.add_argument('-exase', type=str, default="default")
 parser.add_argument('-verbose', type=int, default=1)
 argus = parser.parse_args()
-
+data_path = r"../attention/data"
 train_params = {
     "n_epochs": argus.n_epochs,
     "batch_size": argus.batch_size,
@@ -90,7 +90,7 @@ tasks["IOR"] = {
 tasks["Arrow"] = {
     "composer": Arrow_DS,
     "key": 1,
-    "params": {"n_iter": 3, "noise": 0.25, "directory": r"./data/arrows"},
+    "params": {"n_iter": 3, "noise": 0.25, "directory": data_path},
     "datasets": [],
     "dataloaders": [],
     "loss_w": (0.0, 0.0, 1.0),
@@ -157,8 +157,8 @@ for i, k in enumerate(tasks):
 (argus.verbose == 1) and logger.info(f"tasks\n {pformat(tasks)}")
 
 # datasets and dataloaders
-tralid_ds = datasets.MNIST(root=r"./data", train=True, download=True, transform=transforms.ToTensor())
-test_ds = datasets.MNIST(root=r"./data", train=False, download=True, transform=transforms.ToTensor())
+tralid_ds = datasets.MNIST(root=data_path, train=True, download=True, transform=transforms.ToTensor())
+test_ds = datasets.MNIST(root=data_path, train=False, download=True, transform=transforms.ToTensor())
 train_ds, valid_ds = random_split(tralid_ds, (50000, 10000))
 DeVice, num_workers, pin_memory = get_device()
 for o in tasks:
