@@ -1,6 +1,7 @@
 # # built-in modules
 import time
 from logging import Logger
+import os
 # # Torch modules
 import torch
 from torch.nn.functional import cross_entropy, mse_loss
@@ -35,7 +36,8 @@ class AttentionTrain:
                  scheduler: torch.optim.lr_scheduler._LRScheduler, 
                  tasks: dict, 
                  logger: Logger, 
-                 results_folder: str):
+                 results_folder: str,
+                 max_grad_norm: float = 10.0):
         self.model = model
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -43,10 +45,10 @@ class AttentionTrain:
         self.logger = logger
         self.results_folder = results_folder
         self.k_tasks = list(tasks.keys())
-        self.n_tasks = len(tasks)
-        if self.n_tasks > 1:
+        self.n_k_tasks = len(self.k_tasks)
+        if self.model.n_tasks > 1:
             train_loaders = [iter(tasks[k]["dataloaders"][0]) for k in self.k_tasks]
-            assert all([len(train_loaders[0]) == len(train_loaders[i]) for i in range(self.n_tasks)])
+            assert all([len(train_loaders[0]) == len(train_loaders[i]) for i in range(self.n_k_tasks)])
             self.n_batches = len(train_loaders[0])
         else:
             self.train_loaders = [tasks[k]["dataloaders"][0] for k in self.k_tasks]
@@ -54,11 +56,11 @@ class AttentionTrain:
         self.valid_loaders = [tasks[k]["dataloaders"][1] for k in self.k_tasks]
         self.test_loaders = [tasks[k]["dataloaders"][2] for k in self.k_tasks]
         
-        self.loss_records = list([[], [], []] for _ in range(self.n_tasks))
-        self.eval_records = list([[], [], [], [], []] for _ in range(self.n_tasks))
+        self.loss_records = list([[], [], []] for _ in range(self.n_k_tasks))
+        self.eval_records = list([[], [], [], [], []] for _ in range(self.n_k_tasks))
 
         self.grad_records = []
-        self.max_grad_norm = 10.0
+        self.max_grad_norm = max_grad_norm
 
 
     def train(self, n_epochs: int, device, verbose: bool = False, mask_mp: float = 0.0):
@@ -113,6 +115,10 @@ class AttentionTrain:
                     clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     self.optimizer.step()
                     self.optimizer.zero_grad(set_to_none=True)
+            # save the model and optimizer
+            torch.save(self.model.state_dict(), os.path.join(self.results_folder, f"model_{epoch}_" + ".pth"))
+            torch.save(self.optimizer.state_dict(), os.path.join(self.results_folder, f"optimizer_{epoch}_" + ".pth"))
+            # update the scheduler
             self.scheduler.step()
 
             # log and plot
@@ -180,7 +186,7 @@ class AttentionTrain:
     def eval(self, device, valid = True, track = False):
         _loader = self.valid_loaders if valid else self.test_loaders
         self.logger.info("validating..." if valid else "testing...")
-        eval_scores = list([0.0, 0.0, 0.0, 0.0, 0] for _ in range(self.n_tasks))
+        eval_scores = list([0.0, 0.0, 0.0, 0.0, 0] for _ in range(self.n_k_tasks))
         
         self.model.to(device)
         self.model.eval()
@@ -207,16 +213,20 @@ class AttentionTrain:
 
                 self.logger.info(f"  Task {k}:")
                 n_samples = _loader[j].dataset.__len__()
-                self.logger.info(f"    CEi Loss: {eval_scores[j][0]/n_samples:.6f}"
-                                 f"    CEe Loss: {eval_scores[j][1]/n_samples:.6f}"
-                                 f"    Pix Err: {eval_scores[j][2]/n_samples:.6f}"
-                                 f"    Att Acc: {eval_scores[j][3]/n_samples:.6f}"
+                eval_scores[j][0] /= n_samples
+                eval_scores[j][1] /= n_samples
+                eval_scores[j][2] /= n_samples
+                eval_scores[j][3] /= n_samples
+                self.logger.info(f"    CEi Loss: {eval_scores[j][0]:.6f}"
+                                 f"    CEe Loss: {eval_scores[j][1]:.6f}"
+                                 f"    Pix Err: {eval_scores[j][2]:.6f}"
+                                 f"    Att Acc: {eval_scores[j][3]:.6f}"
                                  f"    Cls Acc: {eval_scores[j][4]}/{n_samples}")
                 if track:
-                    self.eval_records[j][0].append(eval_scores[j][0]/n_samples)
-                    self.eval_records[j][1].append(eval_scores[j][1]/n_samples)
-                    self.eval_records[j][2].append(eval_scores[j][2]/n_samples)
-                    self.eval_records[j][3].append(eval_scores[j][3]/n_samples)
+                    self.eval_records[j][0].append(eval_scores[j][0])
+                    self.eval_records[j][1].append(eval_scores[j][1])
+                    self.eval_records[j][2].append(eval_scores[j][2])
+                    self.eval_records[j][3].append(eval_scores[j][3])
                     self.eval_records[j][4].append(eval_scores[j][4]/n_samples)
         
     def eval_ior(self, dloader_, device_):
