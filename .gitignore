@@ -1,8 +1,6 @@
 # Added to template
 workshop.py
 results/*
-data/MNIST
-data/celeba
 logs/*
 .DS_Store
 */.DS_Store
@@ -11,6 +9,9 @@ logs/*
 .idea/
 *.log
 *.sh
+data/MNIST
+data/celeba
+data/coco
 
 
 # Byte-compiled / optimized / DLL files
