@@ -794,3 +794,746 @@ class CelebACrop(Dataset):
         composites += self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
         return composites, labels, 0, 0, 0
+
+
+class COCOTokens:
+    def __init__(self,
+                 directory: str,
+                 animals: bool = True,
+                 split: float = 0.9,
+                 ):
+        from src.pycocotools.coco import COCO
+        self.split = split
+        self.directory = os.path.join(directory, "coco")
+        self.coco = COCO(os.path.join(self.directory, "annotations/instances_train2017.json"))
+        self.coco_test = COCO(os.path.join(self.directory, "annotations/instances_val2017.json"))
+        if animals:
+            self.entities = ['bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe']
+        else:
+            self.entities = list(o["name"] for o in self.coco.loadCats(self.coco.getCatIds()))
+        self.ids = self.coco.getCatIds(catNms=self.entities)
+
+    def get_tokens(self):
+        trvl_tokens = self._get_tokens(self.coco, False)
+        test_tokens = self._get_tokens(self.coco_test, True)
+        train_tokens, valid_tokens = self._split(trvl_tokens)
+        return train_tokens, valid_tokens, test_tokens
+
+    def _split(self, x: Union[list, tuple]):
+        n_train = int(len(x) * self.split)
+        return (x[:n_train], x[n_train:])
+
+    def _get_tokens(self, ds_, test: bool = False):
+        tokens = []
+        for id in self.ids:
+            tokens += ds_.getImgIds(catIds=[id])
+        (258322 in tokens) and tokens.remove(258322)
+        (214520 in tokens) and tokens.remove(214520)
+        not test and random.shuffle(tokens)
+        return torch.tensor(tokens)
+
+
+class COCOAnimals(Dataset):
+    def __init__(self,
+                 in_dims: tuple,
+                 directory: str,
+                 kind: int,  # 0: train, 1: valid, 2: test
+                 tokens: torch.Tensor,
+                 animals: bool = True,
+                 min_area: float = 1.0/64.0,
+                 ):
+        super().__init__()
+        in_dims = in_dims if len(in_dims) == 2 else in_dims[1:]
+        from src.pycocotools.coco import COCO
+        self.h, self.w = in_dims
+        self.kind = kind
+        self.tokens = tokens
+        self.min_area = min_area
+        self.directory = os.path.join(directory, "coco")
+        self.file_type = "val2017" if kind == 2 else "train2017"
+        self.coco = COCO(os.path.join(self.directory, f"annotations/instances_{self.file_type}.json"))
+        if animals:
+            self.entities = ['bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe']
+        else:
+            self.entities = list(o["name"] for o in self.coco.loadCats(self.coco.getCatIds()))
+        self.ids = self.coco.getCatIds(catNms=self.entities)
+        self.n_classes = len(self.entities)
+        self.classes = list(range(self.n_classes))
+        self.id_to_label = dict(zip(self.ids, self.classes))
+        self.transform = transforms.ToTensor()
+        self.fix_kernel = torch.ones(1, 1, 7, 7)
+        
+        self.triplets = None  # labels list of triplets [token, ann_id, label]
+        self.tk_cls_anns = None  # list of token, label, list of ann_ids
+        self.tk_cls_sann = None  # list of token, label, single ann_id
+        self.tk_cls_osann = None  # list of token, label, only single ann_id
+        self.class_weights = None
+        self._len_ = 0
+
+    def _is_it_good(self, ann: dict, token: int, crowdisok: bool = False):
+        height, width = self.coco.loadImgs(token)[0]['height'], self.coco.loadImgs(token)[0]['width']
+        category_id = ann['category_id']
+        area = ann["area"] / (height * width)
+        isnotcrowd = (True, False)[ann['iscrowd']] or crowdisok
+        its_good = (category_id in self.ids and isnotcrowd and area > self.min_area)
+        return its_good
+
+    def _get_ann(self, ann_id: int):
+        return self.coco.loadAnns([ann_id])[0]
+
+    def _load_anns(self, token: int):
+        return self.coco.loadAnns(self.coco.getAnnIds([token]))
+
+    def _crop_box(self, x: torch.Tensor, ann: dict):
+        x_min, y_min, width, height = ann['bbox']
+        x_min, y_min = int(x_min), int(y_min)
+        width, height = min(int(width) + 1, x.size(-1)), min(int(height) + 1, x.size(-2))
+        return x[:, y_min:y_min+height, x_min:x_min+width]
+
+    def _get_image(self, token: int):
+        meta_data = self.coco.loadImgs(token)[0]
+        file_name = meta_data["file_name"]
+        PIL_file = PILImage.open(os.path.join(self.directory, "images/{}/{}".format(self.file_type, file_name)))
+        return self.transform(PIL_file.convert("RGB"))
+
+    def _get_mask(self, ann: dict):
+        return (1.0 * (self.transform(self.coco.annToMask(ann)) > 0.0))
+        
+    def _get_targets(self, token: int, ann_id: int):
+        ann_ = self._load_anns(token)[ann_id]
+        label = self.id_to_label[ann_["category_id"]]
+        mask = self._get_mask(ann_)
+        return label, mask
+
+    def _get_class_weights(self):
+        assert (self.class_weights > 0.0).all(), "class weights are not set or a class has 0 instance!"
+        self.class_weights = len(self.tokens) / self.class_weights
+        self.class_weights = self.class_weights / self.class_weights.sum()
+
+    def _get_tokens(self, shuffle: bool = False):
+        if self.tokens is None:
+            self.tokens = []
+            for id in self.ids:
+                self.tokens += self.coco.getImgIds(catIds=[id])
+            if self.file_type == "train2017":  # # droping the two problematic images
+                (258322 in self.tokens) and self.tokens.remove(258322)
+                (214520 in self.tokens) and self.tokens.remove(214520)
+            shuffle and random.shuffle(self.tokens)
+        return self.tokens
+
+    def _get_triplets(self):
+        if self.triplets is None:
+            self.class_weights = torch.zeros(self.n_classes)
+            self.triplets = []
+            self.triplet_classes = list([] for _ in range(self.n_classes))
+            i = 0
+            for token_ in self.tokens:
+                token_ = token_.item()
+                for ann_ in self._load_anns(token_):
+                    if self._is_it_good(ann_, token_):
+                        label_ = self.id_to_label[ann_['category_id']]
+                        self.triplets.append((token_, ann_['id'], label_))
+                        self.triplet_classes[label_].append(i)
+                        self.class_weights[label_] += 1
+                        i += 1
+
+            self._get_class_weights()
+        self._len_ = max(len(self.triplets), self._len_)
+        return torch.tensor(self.triplets)
+
+    def _get_tk_cls_anns(self, crowdisok: bool = False):
+        if self.tk_cls_anns is None:
+            self.tk_cls_anns = []
+            for token_ in self.tokens:
+                token_ = token_.item()
+                for cls in self.classes:
+                    anns_ids = []
+                    for ann_ in self._load_anns(token_):
+                        if self._is_it_good(ann_, token_, crowdisok):
+                            if self.id_to_label[ann_['category_id']] == cls:
+                                anns_ids.append(ann_['id'])
+                    if len(anns_ids) > 0:
+                        self.tk_cls_anns.append((token_, cls, anns_ids))
+        self._len_ = max(len(self.tk_cls_anns), self._len_)
+        return self.tk_cls_anns
+
+    def _get_tk_cls_sann(self, crowdisok: bool = False):
+        if self.tk_cls_sann is None:
+            self.tk_cls_sann = []
+            for token_ in self.tokens:
+                token_ = token_.item()
+                for cls in self.classes:
+                    the_ann_id = None
+                    a = 0.0
+                    for ann_ in self._load_anns(token_):
+                        if self._is_it_good(ann_, token_, crowdisok):
+                            if self.id_to_label[ann_['category_id']] == cls:
+                                if ann_['area'] > a:
+                                    the_ann_id = ann_['id']
+                                    a = ann_['area']
+                    if the_ann_id is not None:
+                        self.tk_cls_sann.append((token_, cls, the_ann_id))
+        self._len_ = max(len(self.tk_cls_sann), self._len_)
+        return torch.tensor(self.tk_cls_sann)
+
+    def _get_tk_cls_osann(self, crowdisok: bool = False):
+        if self.tk_cls_osann is None:
+            self.tk_cls_osann = []
+            for token_ in self.tokens:
+                token_ = token_.item()
+                for cls in self.classes:
+                    anns_ids = []
+                    for ann_ in self._load_anns(token_):
+                        if self._is_it_good(ann_, token_, crowdisok):
+                            if self.id_to_label[ann_['category_id']] == cls:
+                                anns_ids.append(ann_['id'])
+                    if len(anns_ids) == 1:
+                        self.tk_cls_osann.append((token_, cls, anns_ids[0]))
+        self._len_ = max(len(self.tk_cls_osann), self._len_)
+        return torch.tensor(self.tk_cls_osann)
+
+    def _crop_square(self, x: torch.Tensor):
+        _, x_h, x_w = x.shape
+        hw = min(x_h, x_w)
+        top = torch.randint(0, x_h - hw, (1, )).item() if x_h > hw else 0
+        left = torch.randint(0, x_w - hw, (1, )).item() if x_w > hw else 0
+        return x[:, top:top+hw, left:left+hw]
+
+    def _resize(self, x: torch.Tensor, h: int, w: int):
+        _, x_h, x_w = x.shape
+        scale = min(h / x_h, w / x_w)
+        if scale < 1.0:
+            new_h, new_w = int(x_h * scale) - 1, int(x_w * scale) - 1
+            x = transforms.functional.resize(x, size=(new_h, new_w), antialias=False)
+        return x
+
+    def _pad(self, x: torch.Tensor, h: int, w: int):
+        _, x_h, x_w = x.shape
+        scale = max(h - x_h, w - x_w)
+        if scale > 0:
+            top = 0 if h - x_h == 0 else torch.randint(0, h - x_h, (1, )).item()
+            right = 0 if w - x_w == 0 else torch.randint(0, w - x_w, (1, )).item()
+            bottom, left = h - x_h - top, w - x_w - right
+            padding = tuple([max(0, i) for i in (left, top, right, bottom)])
+            x = transforms.functional.pad(x, padding=padding, padding_mode='constant', fill=0.0)
+        return x
+
+    def _resize_pad(self, x: torch.Tensor, h: int, w: int, token: int = None, crop: bool = True):
+        x = self._crop_square(x) if (crop and h == w and random.random() > 0.9) else x
+        x = self._resize(x, h, w)
+        x = self._pad(x, h, w)
+        if x.shape[-2:] != (h, w):
+            print(f"failed for {token}")
+            x = torch.randn(x.size(0), h, w)
+        return x
+
+    def _getitem_triplet(self, idx):
+        token, ann_id, y = self.triplets[idx]
+        x = self._get_image(token)
+        m = self._get_mask(self._get_ann(ann_id))
+        xm = torch.cat((x, m), dim=0)
+        xm = self._resize_pad(xm, self.h, self.w, token)
+        return xm, y
+    
+    def _getitem_tk_cls_anns(self, idx):
+        token, y, ann_ids = self.tk_cls_anns[idx]
+        x = self._get_image(token)
+        m = torch.zeros(len(ann_ids), x.size(1), x.size(2))
+        for i, ann_id in enumerate(ann_ids):
+            m[i] = self._get_mask(self._get_ann(ann_id))
+        xm = torch.cat((x, m), dim=0)
+        xm = self._resize_pad(xm, self.h, self.w, token)
+        return xm, y
+    
+    def _getitem_tk_cls_sann(self, idx):
+        token, y, ann_id = self.tk_cls_sann[idx]
+        x = self._get_image(token)
+        m = self._get_mask(self._get_ann(ann_id))
+        xm = torch.cat((x, m), dim=0)
+        xm = self._resize_pad(xm, self.h, self.w, token)
+        return xm, y
+    
+    def _getitem_tk_cls_osann(self, idx):
+        token, y, ann_id = self.tk_cls_osann[idx]
+        x = self._get_image(token)
+        m = self._get_mask(self._get_ann(ann_id))
+        xm = torch.cat((x, m), dim=0)
+        xm = self._resize_pad(xm, self.h, self.w, token)
+        return xm, y
+
+
+class BG20k(Dataset):
+    def __init__(self, root: str, kind: str):
+        self.root = os.path.join(root, r"BG-20k")
+        self.transform = transforms.ToTensor()
+        self.dataset = datasets.ImageFolder(root=self.root, transform=self.transform)
+        self.kind = kind
+        if kind == 'train':
+            self.start, self.end = 0, 15000
+        elif kind == 'test' or kind == 'valid':
+            self.start, self.end = 15000, 20000
+
+    def build_valid_test(self):
+        self.kind = "test"
+        self.start, self.end = 15000, 20000
+
+    def __len__(self):
+        return self.end - self.start
+
+    def __getitem__(self, idx):
+        x, _ = self.dataset[self.start+idx]
+        return x
+    
+
+class ConceptualGrouping_COCO(Dataset):
+    def __init__(self,
+                 coco_dataset: COCOAnimals,
+                 fix_attend: tuple,
+                 noise: float = 0.25,):
+        
+        super().__init__()
+        self.kind = "train"
+        assert len(fix_attend) == 2
+        self.k = 3
+        self.dataset = coco_dataset  # COCO datasets
+        self.h, self.w = coco_dataset.h, coco_dataset.w
+        self.dataset._get_triplets()
+        self.class_weights = self.dataset.class_weights
+        self.fixate, self.attend = fix_attend
+        self.n_iter = sum(fix_attend)
+        self.noise = noise  # noise scale
+        self.fix_pointer = FixPoints(self.k)
+        self.flip_transform = transforms.RandomHorizontalFlip(p=0.5)
+        self.color_transform = transforms.Compose([
+            transforms.RandomGrayscale(p=0.125),
+            transforms.ColorJitter(brightness=(0.8, 1.2), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+            transforms.RandomAutocontrast(p=0.125),
+            # transforms.RandomInvert(p=0.125),
+            ])
+
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.flip_transform = lambda x: x
+        self.color_transform = lambda x: x
+        self.noise = 0.0
+
+    def get_fixed_point(self, m: torch.tensor):
+        if torch.rand(1).item() > 0.5 or self.kind == "not_train":
+            ci, cj = center_of_mass(m)
+        else:
+            ci, cj = self.fix_pointer.get_rand_fix_point(m)
+        return coord_to_points(m, ci, cj, self.k)
+
+    def __len__(self):
+        return self.dataset._len_ if self.kind == "train" else len(self.dataset.triplets)
+
+    def __getitem__(self, idx: int):
+        idx = torch.randint(0, len(self.dataset.triplets), (1, )).item() if self.kind == "train" else idx
+        xm, y = self.dataset._getitem_triplet(idx)
+        xm = self.flip_transform(xm)
+        x, m = xm[:3], xm[3:]
+        x = self.color_transform(x)
+        p = self.get_fixed_point(m) if m.sum() > 0.0 else torch.zeros_like(m)
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        components = 0
+        hot_labels = 0
+
+        # assignments
+        composites[:self.fixate] = p
+        masks[:self.fixate] = p
+        composites[self.fixate:] = x
+        masks[self.fixate:] = m
+        labels[:] = y
+
+        # adding noise and clamping 
+        composites += self.noise * torch.rand_like(composites)
+        composites = torch.clamp(composites, 0.0, 1.0)
+        masks = 2.0 * (masks - 0.5)
+
+        return composites, labels, masks, components, hot_labels
+
+
+class ExpSearch_COCO_v2(Dataset):
+    def __init__(self,
+                 coco_dataset: COCOAnimals,
+                 n_iter: tuple,
+                 noise: float = 0.25,):
+        
+        super().__init__()
+        self.kind = "train"
+        self.dataset = coco_dataset  # COCO datasets
+        self.h, self.w = coco_dataset.h, coco_dataset.w
+        self.n_iter = n_iter
+        self.noise = noise  # noise scale
+        self.dataset._get_tk_cls_anns(False)
+        self.flip_transform = transforms.RandomHorizontalFlip(p=0.5)
+        self.color_transform = transforms.Compose([
+            transforms.RandomGrayscale(p=0.125),
+            transforms.ColorJitter(brightness=(0.8, 1.2), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+            transforms.RandomAutocontrast(p=0.125),
+            transforms.RandomInvert(p=0.125),
+            ])
+
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.flip_transform = lambda x: x
+        self.color_transform = lambda x: x
+        self.noise = 0.0
+
+    def __len__(self):
+        return self.dataset._len_ if self.kind == "train" else len(self.dataset.tk_cls_anns)
+
+    def __getitem__(self, idx: int):
+        idx = torch.randint(0, len(self.dataset.tk_cls_anns), (1, )).item() if self.kind == "train" else idx
+        xms, y = self.dataset._getitem_tk_cls_anns(idx)
+        xms = self.flip_transform(xms)
+        x, ms = xms[:3], xms[3:]
+        x = self.color_transform(x)
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = torch.zeros(self.n_iter, self.dataset.n_classes).float()
+        components = 0
+
+        # assignments
+        composites[:] = x
+        masks[:] = ms.sum(0, keepdim=True)
+        labels[:] = y
+        hot_labels[:] = one_hot(labels, num_classes=self.dataset.n_classes).float()
+
+        # adding noise and clamping 
+        composites, masks = routine_01(composites, masks, self.noise)
+
+        return composites, labels, masks, components, hot_labels
+
+
+class Search_COCO(Dataset):
+    def __init__(self,
+                 coco_dataset: COCOAnimals,
+                 n_iter: tuple,
+                 noise: float = 0.25,):
+        
+        super().__init__()
+        self.kind = "train"
+        self.dataset = coco_dataset  # COCO datasets
+        self.h, self.w = coco_dataset.h, coco_dataset.w
+        self.n_iter = n_iter
+        self.noise = noise  # noise scale
+        self.dataset._get_tk_cls_osann(False)
+        self.flip_transform = transforms.RandomHorizontalFlip(p=0.5)
+        self.color_transform = transforms.Compose([
+            transforms.RandomGrayscale(p=0.125),
+            transforms.ColorJitter(brightness=(0.8, 1.2), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+            transforms.RandomAutocontrast(p=0.125),
+            transforms.RandomInvert(p=0.125),
+            ])
+
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.flip_transform = lambda x: x
+        self.color_transform = lambda x: x
+        self.noise = 0.0
+
+    def __len__(self):
+        return self.dataset._len_ if self.kind == "train" else len(self.dataset.tk_cls_osann)
+
+    def __getitem__(self, idx: int):
+        idx = torch.randint(0, len(self.dataset.tk_cls_osann), (1, )).item() if self.kind == "train" else idx
+        xm, y = self.dataset._getitem_tk_cls_osann(idx)
+        xm = self.flip_transform(xm)
+        x, m = xm[:3], xm[3:]
+        x = self.color_transform(x)
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = torch.zeros(self.n_iter, self.dataset.n_classes).float()
+        components = 0
+
+        # assignments
+        composites[:] = x
+        masks[:] = m.sum(0, keepdim=True)
+        labels[:] = y
+        hot_labels[:] = one_hot(labels, num_classes=self.dataset.n_classes).float()
+
+        # adding noise and clamping 
+        composites, masks = routine_01(composites, masks, self.noise)
+
+
+        return composites, labels, masks, components, hot_labels
+
+
+class SearchGrid_COCO(Dataset):
+    def __init__(self,
+                 coco_dataset: COCOAnimals,
+                 bg_dataset: BG20k,
+                 n_iter: tuple,
+                 noise: float = 0.25,):
+        
+        super().__init__()
+        self.kind = "train"
+        self.dataset = coco_dataset
+        self.bg_dataset = bg_dataset
+        self.n_bg = len(bg_dataset)
+        self.n_iter = n_iter
+        self.noise = noise  # noise scale
+        self.h, self.w = coco_dataset.h, coco_dataset.w
+        self.n_objects = 4
+        if self.n_objects == 4:
+            self.hh, self.ww = self.h // 2, self.w // 2
+            self.grid = {0: (slice(0, self.hh), slice(0, self.ww)), 
+                        1: (slice(0, self.hh), slice(self.ww, None)),
+                        2: (slice(self.hh, None), slice(0, self.ww)),
+                        3: (slice(self.hh, None), slice(self.ww, None))}
+        elif self.n_objects == 9:
+            self.hh, self.ww = self.h // 3, self.w // 3
+            self.grid = {0: (slice(0, self.hh), slice(0, self.ww)), 
+                        1: (slice(0, self.hh), slice(self.ww, 2*self.ww)),
+                        2: (slice(0, self.hh), slice(2*self.ww, None)),
+                        3: (slice(self.hh, 2*self.hh), slice(0, self.ww)),
+                        4: (slice(self.hh, 2*self.hh), slice(self.ww, 2*self.ww)),
+                        5: (slice(self.hh, 2*self.hh), slice(2*self.ww, None)),
+                        6: (slice(2*self.hh, None), slice(0, self.ww)),
+                        7: (slice(2*self.hh, None), slice(self.ww, 2*self.ww)),
+                        8: (slice(2*self.hh, None), slice(2*self.ww, None))}
+        self.dataset._get_triplets()
+        self.flip_transform = transforms.RandomHorizontalFlip(p=0.5)
+        self.color_transform = transforms.Compose([
+            transforms.RandomGrayscale(p=0.125),
+            transforms.ColorJitter(brightness=(0.8, 1.2), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+            transforms.RandomAutocontrast(p=0.125),
+            transforms.RandomInvert(p=0.125),
+            ])
+
+    def fit_for_grid(self, token: int, ann_id: int):
+        ann = self.dataset._get_ann(ann_id)
+        x = self.dataset._get_image(token)
+        m = self.dataset._get_mask(ann)
+        xm = torch.cat((x, m), dim=0)
+        xm = self.dataset._crop_box(xm, ann)
+        xm = self.dataset._resize_pad(xm, self.hh, self.ww, token, False)
+        return xm
+
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.flip_transform = lambda x: x
+        self.color_transform = lambda x: x
+        self.noise = 0.0
+
+    def get_random_digit(self, ind_list: list = None):
+        i = random.choice(ind_list)
+        return self.dataset.__getitem__(i)
+
+    def rand_crop(self, x, th, tw):
+        _, h, w = x.size()
+        if h > th and w > tw:
+            i = torch.randint(0, h - th + 1, (1, )).item()
+            j = torch.randint(0, w - tw + 1, (1, )).item()
+            x = x[:, i:i+th, j:j+tw]
+        return x
+
+    def make_background(self):
+        i = torch.randint(0, self.n_bg, (1, )).item()
+        x = self.bg_dataset[i]
+        _, h, w = x.shape
+        ph, pw = max(0, self.h - h), max(0, self.w - w)
+        if ph > 0 or pw > 0:
+            x = transforms.functional.pad(x, (1 + pw//2, 1 + ph//2), padding_mode='reflect')
+        _, h, w = x.shape
+        if h > self.h and w > self.w:
+            s = min(h/self.h, w/self.w)
+            x = transforms.functional.resize(x, (int(h/s)+1, int(w/s)+1), antialias=False)
+        return x[:, :self.h, :self.w]
+
+    def __len__(self):
+        return self.dataset._len_ if self.kind == "train" else len(self.dataset.triplets)
+
+    def __getitem__(self, idx: int):
+        idx = torch.randint(0, len(self.dataset.triplets), (1, )).item() if self.kind == "train" else idx
+        token, ann_id, y = self.dataset.triplets[idx]
+        xm = self.fit_for_grid(token, ann_id)
+        xm = self.flip_transform(xm)
+        x, m = xm[:3], xm[3:]
+        # x = self.color_transform(x)
+        x *= m
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = 0
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = torch.zeros(self.n_iter, self.dataset.n_classes).float()
+        pos = list(range(self.n_objects))
+        random.shuffle(pos)
+
+        # background
+        background = self.make_background()
+        composites[:] = background
+
+        # assignments
+        labels[:] = y
+        hot_labels[:] = one_hot(labels[0], self.dataset.n_classes).squeeze().float()
+        hs, ws = self.grid[pos[-1]]
+        composites[:, :, hs, ws] = x + composites[:, :, hs, ws] * (1.0 - m)
+        masks[:, :, hs, ws] = m
+
+        # composing while avoiding overlap
+        y_list = random.sample(self.dataset.classes, k=self.n_objects)
+        y_list.remove(y) if y in y_list else y_list.pop()
+        for i, s in enumerate(y_list):
+            j = random.choice(self.dataset.triplet_classes[s])
+            token, ann_id, y = self.dataset.triplets[j]
+            assert y == s
+            xm = self.fit_for_grid(token, ann_id)
+            xm = self.flip_transform(xm)
+            x, m = xm[:3], xm[3:]
+            # x = self.color_transform(x)
+            x *= m
+            hs, ws = self.grid[pos[i]]
+            composites[:, :, hs, ws] = x + composites[:, :, hs, ws] * (1.0 - m)
+                    
+        # adding noise and clamping 
+        composites, masks = routine_01(composites, masks, self.noise)
+
+        return composites, labels, masks, components, hot_labels
+
+
+class Recognition_COCO(Dataset):
+    def __init__(self,
+                 coco_dataset: COCOAnimals,
+                 bg_dataset: BG20k,
+                 n_iter: tuple,
+                 stride: int,
+                 static: bool,
+                 blank: bool,
+                 noise: float = 0.25,):
+        
+        super().__init__()
+        self.kind = "train"
+        self.dataset = coco_dataset
+        self.bg_dataset = bg_dataset
+        self.n_iter = n_iter
+        self.stride = stride
+        self.static = static
+        self.blank = blank
+        self.noise = noise
+        self.n_bg = len(bg_dataset)
+        self.h, self.w = coco_dataset.h, coco_dataset.w
+        self.dataset._get_triplets()
+        self.class_weights = self.dataset.class_weights
+        self.flip_transform = transforms.RandomHorizontalFlip(p=0.5)
+        self.size_transform = transforms.RandomAffine(degrees=0, translate=(0.0, 0.0), scale=(0.5, 1.0))
+        self.color_transform = transforms.Compose([
+            transforms.RandomGrayscale(p=0.125),
+            transforms.ColorJitter(brightness=(0.9, 1.1), saturation=(0.9, 1.1), hue=(-0.1, 0.1)),
+            transforms.RandomAutocontrast(p=0.125),
+            # transforms.RandomInvert(p=0.125),
+            ])
+
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.flip_transform = lambda x: x
+        self.color_transform = lambda x: x
+        self.noise = 0.0
+        self.bg_dataset.build_valid_test()
+
+    def _prepare(self, token: int, ann_id: int):
+        ann = self.dataset._get_ann(ann_id)
+        x = self.dataset._get_image(token)
+        m = self.dataset._get_mask(ann)
+        xm = torch.cat((x, m), dim=0)
+        xm = self.dataset._crop_box(xm, ann)
+        xm = self.dataset._resize_pad(xm, self.h, self.w, token, False)
+        return xm
+
+    def make_foreground(self):
+        window_shape = (self.h, self.w + self.stride * self.n_iter)
+        pink_fore = pink(window_shape, 2.5, 0.1, torch.cos).unsqueeze(0)
+        pink_fore = 1.0 * ((0.5 + pink_fore / 2) > 0.7)
+        return pink_fore
+
+    def rand_crop(self, x, th, tw):
+        _, h, w = x.size()
+        if h > th and w > tw:
+            i = torch.randint(0, h - th + 1, (1, )).item()
+            j = torch.randint(0, w - tw + 1, (1, )).item()
+            x = x[:, i:i+th, j:j+tw]
+        return x
+
+    def make_background(self):
+        hs, ws = random.randint(1, self.stride), random.randint(1, self.stride)
+        nh, nw = (self.n_iter * hs) + self.h, (self.n_iter * ws) + self.w
+        i = torch.randint(0, self.n_bg, (1, )).item()
+        x = self.bg_dataset[i]
+        _, h, w = x.size()
+        ph, pw = max(0, nh - h), max(0, nw - w)
+        if ph > 0 or pw > 0:
+            x = transforms.functional.pad(x, (1 + pw//2, 1 + ph//2), padding_mode='reflect')
+        _, h, w = x.size()
+        if h > nh and w > nw:
+            s = min(h/nh, w/nw)
+            x = transforms.functional.resize(x, (int(h/s)+1, int(w/s)+1), antialias=False)
+        return x[:, :nh, :nw], (hs, ws)
+
+    def get_random_digit(self, ind_list: list = None):
+        i = random.choice(ind_list)
+        return self.dataset.__getitem__(i)
+
+    def __len__(self):
+        return self.dataset._len_ if self.kind == "train" else len(self.dataset.triplets)
+
+    def __getitem__(self, idx: int):
+        idx = torch.randint(0, len(self.dataset.triplets), (1, )).item() if self.kind == "train" else idx
+        token, ann_id, y = self.dataset.triplets[idx]
+        xm = self._prepare(token, ann_id)
+        xm = self.flip_transform(xm)
+        xm = self.size_transform(xm) if random.randint(0, 1) == 0 else xm
+        x, m = xm[:3], xm[3:]
+        x = self.color_transform(x)
+        x *= m
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = torch.zeros(self.n_iter, self.dataset.n_classes).float()
+        components = 0
+
+        # get background and foreground
+        foreground_color = torch.rand(3, 1, 1)
+        foreground_color /= (foreground_color.max() + 1e-6)
+        background, (hs, ws) = self.make_background()
+
+        # assignments
+        labels[:] = y
+        hot_labels[:] = one_hot(labels[0], self.dataset.n_classes).squeeze().float()
+        masks[:] = m
+
+        # background
+        if self.blank:
+            composites[:] = x
+        else:
+            if self.static:
+                composites[:] = background[:, :, :self.w] * (1.0 - m) + x
+            else:
+                d = random.randint(0, 1)
+                for i in range(self.n_iter):
+                    if d == 0:
+                        hslc = slice(i * hs, self.h + i * hs)
+                        wslc = slice(i * ws, self.w + i * ws)
+                    else:
+                        hslc = slice((self.n_iter - i) * hs, self.h + (self.n_iter - i) * hs)
+                        wslc = slice((self.n_iter - i) * ws, self.w + (self.n_iter - i) * ws)
+                    composites[i] = background[:, hslc, wslc] * (1.0 - m) + x
+
+        # adding noise and clamping 
+        composites, masks = routine_01(composites, masks, self.noise)
+
+        return composites, labels, masks, components, hot_labels
