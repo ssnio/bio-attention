@@ -191,11 +191,11 @@ class Arrow_DS(Dataset):
                  mnist_dataset: Dataset,  # MNIST datasets
                  n_iter: tuple,  # number of iterations
                  noise: float = 0.25,  # noise scale
-                 directory: str = r"./data/arrows",  # directory of the arrow images
+                 directory: str = r"./data/",  # directory of the arrow images
                  ):
         
         super().__init__()
-        self.directory = directory
+        self.directory = os.path.join(directory, "arrows")
         self.dataset = mnist_dataset
         self.n_iter = n_iter
         self.noise = noise
