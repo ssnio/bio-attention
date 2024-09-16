@@ -25,6 +25,7 @@ parser.add_argument('-n_epochs', type=int, default=32)
 parser.add_argument('-batch_size', type=int, default=128)
 parser.add_argument('-lr', type=float, default=0.0001)
 parser.add_argument('-l2', type=float, default=1e-3)
+parser.add_argument('-n_iter', type=int, default=2)
 parser.add_argument('-exase', type=str, default="default")
 parser.add_argument('-verbose', type=int, default=1)
 argus = parser.parse_args()
@@ -77,7 +78,7 @@ tasks = OrderedDict({})
 tasks["Celeb"] = {
     "composer": CelebACrop,  # composer (torch Dataset)
     "key": 0,  # key for the task
-    "params": {"n_iter": 2, "hair_dir": None, "in_dims": model_params["in_dims"], "padding": 0, "noise": 0.125, "which": 0},
+    "params": {"n_iter": argus.n_iter, "hair_dir": None, "in_dims": model_params["in_dims"], "padding": 0, "noise": 0.125, "which": 0},
     "datasets": [],
     "dataloaders": [],
     "loss_w": (0.0, 0.0, 1.0),  # Loss weights (Cross-Entropy (CE), MSE for attention, CE last label)
