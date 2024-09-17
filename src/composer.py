@@ -748,7 +748,6 @@ class CelebACrop(Dataset):
         self.transform = transforms.Compose([
             transforms.Resize((self.h - 2*self.padding, self.w - 2*self.padding), antialias=True),
             transforms.RandomHorizontalFlip(),
-            self.nosie_pad if self.kind == "train" else transforms.Pad(self.padding),
             ])
 
     def get_hair(self):
@@ -773,14 +772,6 @@ class CelebACrop(Dataset):
         print(f'{self.kind}_hair_ids.pt saved to file!')
         return hair_ids
 
-    def nosie_pad(self, x: torch.Tensor):
-        y = torch.rand(x.size(0), self.h, self.w)
-        h, w = x.shape[-2:]
-        pad_h = torch.randint(0, self.h - h, (1,)).item() if h < self.h else 0
-        pad_w = torch.randint(0, self.w - w, (1,)).item() if w < self.w else 0
-        y[:, pad_h:pad_h+h, pad_w:pad_w+w] = x
-        return y
-
     def __len__(self):
         return len(self.hair_ids[self.which])
 
@@ -791,7 +782,7 @@ class CelebACrop(Dataset):
         composites[:] = self.transform(x)
         labels = torch.zeros(self.n_iter).long()
         labels[:] = y[self.gender_i]
-        composites += self.noise * torch.rand_like(composites)
+        composites += torch.rand(1) * self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
         return composites, labels, 0, 0, 0
 
