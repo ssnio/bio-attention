@@ -210,6 +210,7 @@ class AttentionModel(torch.nn.Module):
                  rnn_to_fc: bool = False,  # whether to use RNN layers or MLP layers
                  out_ext: bool = False,  # whether the output is extended or the same size as out_dim
                  rnn_cat: bool = False,  # whether to concatenate the forward and backward RNN outputs
+                 use_bridges: bool = False,  # whether to use a bridge between the encoder and decoder
                  ):
         super().__init__()
         self.normalize = normalize
@@ -249,7 +250,9 @@ class AttentionModel(torch.nn.Module):
         self.rnn_to_fc = rnn_to_fc
         self.out_ext = out_ext
         self.rnn_cat = rnn_cat
+        self.use_bridges = use_bridges
         self.bridge_norm = "layer"
+        assert use_bridges is False or isinstance(conv_funs, torch.nn.Tanh)
         self.conv_blocks = torch.nn.ModuleList()
         self.frnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
         self.brnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
@@ -324,8 +327,11 @@ class AttentionModel(torch.nn.Module):
                                                   self.conv_dropouts[-i],
                                                   self.deconv_funs[-i] if i < self.n_convs else torch.nn.Tanh(), 
                                                   ))
-            if i < self.n_convs:
-                self.bridges.append(torch.nn.Sequential(makenorm(self.bridge_norm, self.channels[-i-1]), torch.nn.Tanh()))
+            if self.use_bridges and i < self.n_convs:
+                    self.bridges.append(torch.nn.Sequential(makenorm(self.bridge_norm, self.channels[-i-1]), torch.nn.Tanh()))
+            else:
+                self.bridges.append(torch.nn.Identity())
+
         # pre-allocation
         self.masks = {}
         self.hstates = {}
@@ -422,7 +428,7 @@ class AttentionModel(torch.nn.Module):
                     b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                     h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
                 h = self.deconv_blocks[i](h)
-                self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h) if i < self.n_convs - 1 else h
+                self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h)
             masks_[r] = self.masks["mask_0"]
 
         # post-processing
@@ -529,7 +535,7 @@ class AttentionModel(torch.nn.Module):
                 b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                 h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
             h = self.deconv_blocks[i](h)
-            self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h) if i < self.n_convs - 1 else h
+            self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h)
         masks_ = self.masks["mask_0"]
         
         return masks_, labels_, act_
