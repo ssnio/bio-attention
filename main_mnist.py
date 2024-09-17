@@ -44,7 +44,8 @@ train_params = {
 
 model_params = {
     "in_dims": (3, 96, 96),  # input dimensions (channels, height, width)
-    "out_dims": 10,  # output dimensions (number of classes)
+    "n_classes": 10,  # number of classes
+    "out_dim": 10,  # output dimensions (could be larger than n_classes)
     "normalize": False,  # normalize input images
     "softness": 0.5,  # softness of the attention (scale)
     "channels": (3, 16, 32, 64, 128, 128),  # channels in the encoder
