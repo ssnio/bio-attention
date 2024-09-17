@@ -24,8 +24,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-n_epochs', type=int, default=32)
 parser.add_argument('-batch_size', type=int, default=128)
 parser.add_argument('-lr', type=float, default=0.0001)
-parser.add_argument('-l2', type=float, default=1e-3)
-parser.add_argument('-n_iter', type=int, default=2)
+parser.add_argument('-l2', type=float, default=1e-4)
+parser.add_argument('-lm', type=float, default=0.0)
+parser.add_argument('-n_iter', type=int, default=1)
 parser.add_argument('-exase', type=str, default="default")
 parser.add_argument('-verbose', type=int, default=1)
 argus = parser.parse_args()
@@ -35,6 +36,7 @@ train_params = {
     "batch_size": argus.batch_size,
     "lr": argus.lr,
     "l2": argus.l2,
+    "lm": argus.lm,
     "exase": argus.exase,
     "dir": r"./results",
     "milestones": [32, ],
@@ -43,10 +45,11 @@ train_params = {
 
 model_params = {
     "in_dims": (3, 128, 128),  # input dimensions (channels, height, width)
-    "out_dims": 2,  # output dimensions (number of classes)
+    "n_classes": 2,  # number of classes
+    "out_dim": 2,  # output dimensions (could be larger than n_classes)
     "normalize": True,  # normalize input images
     "softness": 0.5,  # softness of the attention (scale)
-    "channels": (3, 4, 8, 16, 16, 16),  # channels in the encoder
+    "channels": (3, 4, 8, 16, 16, 32),  # channels in the encoder
     "residuals": False,  # use residuals in the encoder
     "kernels": 3,  # kernel size
     "strides": 1,  # stride
@@ -67,6 +70,8 @@ model_params = {
     "task_bias": False,  # use tasks embeddings for the decoder channels  (additive)
     "task_funs": None,  # activation function for the tasks embeddings
     "rnn_to_fc": True,  # Whether to use the RNN layers or FC
+    "rnn_cat": False, # whether to concatenate the forward and backward RNN outputs
+    "use_bridges": False,  # whether to use a fancy bridge between the encoder and decoder
 }
 
 # # tasks include the composer, key, params, datasets, dataloaders, loss weights, loss slices, and has prompt
@@ -116,7 +121,7 @@ conductor = AttentionTrain(model, optimizer, scheduler, tasks, logger, results_f
 # training...
 plot_all(10, model, tasks, results_folder, "_pre", DeVice, logger, (argus.verbose == 1))
 conductor.eval(DeVice)
-conductor.train(train_params["n_epochs"], DeVice, True)
+conductor.train(train_params["n_epochs"], DeVice, True, train_params["lm"])
 plot_loss_all(conductor, results_folder)
 conductor.eval(DeVice)
 plot_all(10, model, tasks, results_folder, "_post", DeVice, logger, False)
