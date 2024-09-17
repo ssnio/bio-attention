@@ -66,7 +66,7 @@ def plot_all(n, model_, tasks_, directory, suffix, device, logger, verbose=False
         elif kind == "test":
             dataloader_ = tasks_[task]["dataloaders"][2]
         key_ = tasks_[task]["key"]
-        has_prompt_ = tasks_[task]["has_prompt"]
+        has_prompt_ = tasks_[task].get("has_prompt", False)
         plot_one(n, model_, dataloader_, key_, has_prompt_, directory, logger, task, suffix, device, verbose)
 
 
