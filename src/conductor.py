@@ -82,7 +82,7 @@ class AttentionTrain:
                     if k == "IOR":
                         loss_1, loss_2, loss_3 = self.train_ior(n_ior, train_loaders[j], device)
                     else:
-                        has_prompt = self.tasks[k]["has_prompt"]
+                        has_prompt = self.tasks[k].get("has_prompt", False)
                         task_id = self.tasks[k]["key"]
                         x, y, m, _, hy = next(train_loaders[j])
                         x, y, m, hy = x.to(device), y.to(device), m.to(device), hy.to(device)
@@ -154,7 +154,7 @@ class AttentionTrain:
 
     def train_ior(self, n_: int, dloader_, device_):
         task_id = self.tasks["IOR"]["key"]
-        has_prompt = self.tasks["IOR"]["has_prompt"]
+        has_prompt = self.tasks["IOR"].get("has_prompt", False)
         n_attend = self.tasks["IOR"]["params"]["n_attend"]
         # rand_n_digits = torch.randint(2, n_digits + 1, (1, )).item()
         x, y, m, _, hy = next(dloader_)
@@ -196,7 +196,7 @@ class AttentionTrain:
                 if k == "IOR":
                     eval_scores[j] = self.eval_ior(_loader[j], device)
                 else:
-                    has_prompt = self.tasks[k]["has_prompt"]
+                    has_prompt = self.tasks[k].get("has_prompt", False)
                     task_id = self.tasks[k]["key"]
                     class_weights = self.tasks[k].get("class_weights", None)
                     class_weights = None if class_weights is None else class_weights.to(device)
@@ -232,7 +232,7 @@ class AttentionTrain:
     def eval_ior(self, dloader_, device_):
         eval_scores_ = [0.0, 0.0, 0.0, 0.0, 0]
         task_id = self.tasks["IOR"]["key"]
-        has_prompt = self.tasks["IOR"]["has_prompt"]
+        has_prompt = self.tasks["IOR"].get("has_prompt", False)
         n_attend = self.tasks["IOR"]["params"]["n_attend"]
         n_digits = self.tasks["IOR"]["params"]["n_digits"]
         for x, y, m, _, hy in dloader_:
