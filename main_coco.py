@@ -27,9 +27,9 @@ train_params = {
     "l2": argus.l2,
     "exase": argus.exase,
     "dir": r"./results",
-    "milestones": [32, ],
+    "milestones": [24, 32, ],
     "gamma": 0.2,
-    "max_grad_norm": 1.0,
+    "max_grad_norm": 10.0,
 }
 
 model_params = {
