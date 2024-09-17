@@ -237,9 +237,9 @@ class AttentionModel(torch.nn.Module):
         self.pools = obj_to_tuple(pools, self.n_convs)
         self.rnn_dims = rnn_dims
         self.n_rnns = len(self.rnn_dims) - 1
-        self.rnn_bias = obj_to_tuple(rnn_bias, self.n_rnns)
-        self.rnn_dropouts = obj_to_tuple(rnn_dropouts, self.n_rnns)
-        self.rnn_funs = obj_to_tuple(rnn_funs, self.n_rnns)
+        self.rnn_bias = obj_to_tuple(rnn_bias, self.n_rnns + 1)
+        self.rnn_dropouts = obj_to_tuple(rnn_dropouts, self.n_rnns + 1)
+        self.rnn_funs = obj_to_tuple(rnn_funs, self.n_rnns + 1)
         self.n_tasks = n_tasks
         self.task_dim = self.n_tasks if self.n_tasks > 1 else 0
         self.norm_mean = [0.485, 0.456, 0.406] if norm_mean is None else norm_mean
