@@ -279,14 +279,18 @@ class AttentionModel(torch.nn.Module):
                                    self.conv_dims[-1][1] // self.pools[i], 
                                    self.conv_dims[-1][2] // self.pools[i]))
         self.flat_dim = self.conv_dims[-1][0] * self.conv_dims[-1][1] * self.conv_dims[-1][2]
-        self.conv_frnn = torch.nn.Linear(self.flat_dim, self.rnn_dims[0])
+        self.conv_frnn = torch.nn.Sequential(
+            torch.nn.Flatten(),
+            torch.nn.Linear(self.flat_dim, self.rnn_dims[0], bias=self.rnn_bias[0]),
+            self.rnn_funs[0]
+        )
+        
         for i in range(self.n_rnns):
             if self.rnn_to_fc:
-                self.frnn_blocks.append(VanillaLayer(self.rnn_dims[i],
-                                                self.rnn_dims[i+1],
-                                                self.rnn_bias[i],
-                                                self.rnn_dropouts[i],
-                                                self.rnn_funs[i]))
+                self.frnn_blocks.append(torch.nn.Sequential(
+                    torch.nn.Linear(self.rnn_dims[i], self.rnn_dims[i+1], bias=self.rnn_bias[i]),
+                    torch.nn.Dropout(self.rnn_dropouts[i]) if self.rnn_dropouts[i] > 0.0 else torch.nn.Identity(),
+                    self.rnn_funs[i]))
             else:
                 self.frnn_blocks.append(MonoSeqRNN(self.rnn_dims[i], 
                                                 self.rnn_dims[i+1], 
@@ -297,18 +301,21 @@ class AttentionModel(torch.nn.Module):
         self.fc_in = torch.nn.Linear(self.task_dim + out_dim, self.rnn_dims[-1])
         for i in range(1, self.n_rnns + 1):
             if self.rnn_to_fc:
-                self.brnn_blocks.append(VanillaLayer(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), 
-                                                self.rnn_dims[-i-1], 
-                                                self.rnn_bias[-i], 
-                                                self.rnn_dropouts[-i], 
-                                                self.rnn_funs[-i]))
+                self.brnn_blocks.append(torch.nn.Sequential(
+                    torch.nn.Linear(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), self.rnn_dims[-i-1], bias=self.rnn_bias[-i]),
+                    torch.nn.Dropout(self.rnn_dropouts[-i]) if self.rnn_dropouts[-i] > 0.0 else torch.nn.Identity(),
+                    self.rnn_funs[-i]))
             else:
                 self.brnn_blocks.append(MonoSeqRNN(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), 
                                                     self.rnn_dims[-i-1], 
                                                     self.rnn_bias[-i], 
                                                     self.rnn_dropouts[-i], 
                                                     self.rnn_funs[-i]))
-        self.brnn_deconv = torch.nn.Linear(self.rnn_dims[0], self.flat_dim)
+        self.brnn_deconv = torch.nn.Sequential(
+            torch.nn.Linear(self.rnn_dims[0], self.flat_dim, bias=self.rnn_bias[0]),
+            self.rnn_funs[0],
+            torch.nn.Unflatten(1, self.conv_dims[-1]),
+        )
         for i in range(1, self.n_convs + 1):
             if (i - 1) in self.task_layers:
                 if self.task_weight:
@@ -393,9 +400,7 @@ class AttentionModel(torch.nn.Module):
                 act_[i][r] = h
             
             # forward conv-rnn connection linear layer
-            h = h.flatten(start_dim=1)
-            h = self.conv_frnn(h)
-            act_[self.n_convs][r] = h
+            h = act_[self.n_convs][r] = self.conv_frnn(h)
 
             # forward recurrent layers
             for i in range(self.n_rnns):
@@ -403,7 +408,7 @@ class AttentionModel(torch.nn.Module):
                 self.hstates[f"f_state{i}"] = h
                 act_[self.n_convs + i + 1][r] = h
 
-            # output and input prompt layer
+            # bottleneck (output labels, input prompts, tasks)
             h = self.fc_out(h)
             labels_[r] = h[:, :self.n_classes]
             h = h if y is None else torch.cat([y[r], h[:, self.n_classes:]], dim=1)
@@ -418,7 +423,6 @@ class AttentionModel(torch.nn.Module):
             
             # backward linear layer
             h = self.brnn_deconv(h)
-            h = h.view(-1, *self.conv_dims[-1])
 
             # deconvolutional layers
             for i in range(self.n_convs):
