@@ -34,7 +34,8 @@ train_params = {
 
 model_params = {
     "in_dims": (3, 256, 256),  # input dimensions (channels, height, width)
-    "out_dims": 10,  # output dimensions (number of classes)
+    "n_classes": 10,  # number of classes
+    "out_dim": 20,  # output dimensions (could be larger than n_classes)
     "normalize": True,  # normalize input images
     "softness": [0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0],  # softness of the attention (scale)
     "channels": (3, 32, 32, 64, 64, 128, 128, 256, 256),  # channels in the encoder
@@ -59,7 +60,6 @@ model_params = {
     "task_bias": True,  # use tasks embeddings for the decoder channels  (additive)
     "task_funs": torch.nn.Tanh(),  # activation function for the tasks embeddings
     "rnn_to_fc": False,  # use FC instead of RNN
-    "out_ext": False,
     "rnn_cat": False,
 }
 
@@ -141,7 +141,7 @@ for o in tasks:
     tasks[o]["datasets"][1].build_valid_test()
     tasks[o]["datasets"][2].build_valid_test()
     tasks[o]["dataloaders"] = build_loaders(tasks[o]["datasets"], batch_size=train_params["batch_size"], num_workers=num_workers, pin_memory=pin_memory, shuffle=False)
-assert model_params["out_dims"] == train_coco.n_classes, f"Number of out_dims {model_params['out_dims']} and n_classes {train_coco.n_classes} must be equal!"
+assert model_params["n_classes"] == train_coco.n_classes, f"Number of n_classes {model_params['n_classes']} and n_classes {train_coco.n_classes} must be equal!"
 tasks["SpatialPrime"]["class_weights"] = train_coco.class_weights if hasattr(train_coco, "class_weights") else None
 tasks["ObjPerm"]["class_weights"] = train_coco.class_weights if hasattr(train_coco, "class_weights") else None
 
