@@ -1539,3 +1539,163 @@ class Recognition_COCO(Dataset):
         composites, masks = routine_01(composites, masks, self.noise)
 
         return composites, labels, masks, components, hot_labels
+
+
+class ABCeleb(Dataset):
+    def __init__(self,
+                 dataset: Dataset,
+                 the_ids: Union[list, tuple],
+                 in_dims: tuple,
+                 ):
+        super().__init__()
+        assert len(the_ids) == 1 or len(the_ids) == 2
+        self.dataset = dataset
+        self.the_ids = the_ids
+        self.in_dims = in_dims
+        _, self.h, self.w = in_dims
+        self.good_ids = self.__goodones_()
+        self.transform = transforms.Compose([
+            transforms.Resize((self.h, self.w), antialias=False),
+            transforms.RandomHorizontalFlip(),
+            ])
+        
+    def __goodones_(self):
+        good_ids = []
+        for i, a in enumerate(self.dataset.attr):
+            if len(self.the_ids) == 1:
+                good_ids.append(i)
+            elif a[self.the_ids[0]] + a[self.the_ids[1]] == 1:
+                good_ids.append(i)
+            else:
+                continue
+        return good_ids
+
+    def __len__(self):
+        return len(self.good_ids)
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[self.good_ids[idx]]
+        x = x[:, 20:-20, :]
+        x = self.transform(x)
+        return x, y[self.the_ids[0]]
+    
+
+class CelebHair(Dataset):
+    def __init__(self,
+                 dataset: Dataset,
+                 n_iter: int,
+                 in_dims: tuple = (3, 128, 128),
+                 noise: float = 0.125,
+                 kind: str = "train",
+                 ):
+        super().__init__()
+        self.the_ids = (8, 9)
+        self.dataset = ABCeleb(dataset, self.the_ids, in_dims=in_dims)
+        self.n_iter = n_iter
+        self.noise = noise if kind == "train" else 0.0
+        self.good_ids = self.dataset.good_ids
+        self.kind = kind
+        
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.noise = 0.0
+    
+    def __len__(self):
+        return 61440 if self.kind == "train" else len(self.good_ids)
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+        x += self.noise * torch.rand_like(x)
+        x = torch.clamp(x, 0.0, 1.0)
+        return do_n_it(x, self.n_iter), do_n_it(y.item(), self.n_iter), 0, 0, 0
+
+
+class CelebGender(Dataset):
+    def __init__(self,
+                 dataset: Dataset,
+                 n_iter: int,
+                 in_dims: tuple = (3, 128, 128),
+                 noise: float = 0.125,
+                 kind: str = "train",
+                 ):
+        super().__init__()
+        self.the_ids = (20, )
+        self.dataset = ABCeleb(dataset, self.the_ids, in_dims=in_dims)
+        self.n_iter = n_iter
+        self.noise = noise if kind == "train" else 0.0
+        self.good_ids = self.dataset.good_ids
+        self.kind = kind
+        
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.noise = 0.0
+    
+    def __len__(self):
+        return 61440 if self.kind == "train" else len(self.good_ids)
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+        x += self.noise * torch.rand_like(x)
+        x = torch.clamp(x, 0.0, 1.0)
+        return do_n_it(x, self.n_iter), do_n_it(y.item(), self.n_iter), 0, 0, 0
+    
+
+class CelebSmile(Dataset):
+    def __init__(self,
+                 dataset: Dataset,
+                 n_iter: int,
+                 in_dims: tuple = (3, 128, 128),
+                 noise: float = 0.125,
+                 kind: str = "train",
+                 ):
+        super().__init__()
+        self.the_ids = (31, )
+        self.dataset = ABCeleb(dataset, self.the_ids, in_dims=in_dims)
+        self.n_iter = n_iter
+        self.noise = noise if kind == "train" else 0.0
+        self.good_ids = self.dataset.good_ids
+        self.kind = kind
+        
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.noise = 0.0
+    
+    def __len__(self):
+        return 61440 if self.kind == "train" else len(self.good_ids)
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+        x += self.noise * torch.rand_like(x)
+        x = torch.clamp(x, 0.0, 1.0)
+        return do_n_it(x, self.n_iter), do_n_it(y.item(), self.n_iter), 0, 0, 0
+    
+
+class CelebGlasses(Dataset):
+    def __init__(self,
+                 dataset: Dataset,
+                 n_iter: int,
+                 in_dims: tuple = (3, 128, 128),
+                 noise: float = 0.125,
+                 kind: str = "train",
+                 ):
+        super().__init__()
+        self.the_ids = (15, )
+        self.dataset = ABCeleb(dataset, self.the_ids, in_dims=in_dims)
+        self.n_iter = n_iter
+        self.noise = noise if kind == "train" else 0.0
+        self.good_ids = self.dataset.good_ids
+        self.kind = kind
+        
+    def build_valid_test(self):
+        self.kind = "not_train"
+        self.noise = 0.0
+    
+    def __len__(self):
+        return 61440 if self.kind == "train" else len(self.good_ids)
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+        x += self.noise * torch.rand_like(x)
+        x = torch.clamp(x, 0.0, 1.0)
+        return do_n_it(x, self.n_iter), do_n_it(y.item(), self.n_iter), 0, 0, 0
+    
