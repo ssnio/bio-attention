@@ -12,6 +12,17 @@ from torch.nn.functional import one_hot, conv2d
 from PIL import Image as PILImage
 
 
+def do_n_it(x: Union[torch.Tensor, int], n: int):
+    if isinstance(x, torch.Tensor):
+        return x.unsqueeze(0).expand(n, -1, -1, -1)
+    elif isinstance(x, int):
+        return torch.tensor([x]).long().expand(n)
+    elif isinstance(x, (list, tuple)):
+        return torch.tensor([list(x)]).long().expand(n, -1)
+    else:
+        raise ValueError(f"Invalid type {type(x)}")
+
+
 def get_classes(dataset_: Dataset, n: int = 10):
     # get the indices of each class
     classes = [[] for _ in range(n)]
