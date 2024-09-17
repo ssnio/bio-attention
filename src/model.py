@@ -181,7 +181,8 @@ class DeConvBlock(torch.nn.Module):
 class AttentionModel(torch.nn.Module):
     def __init__(self,
                  in_dims: tuple,  # C x H x W
-                 out_dims: int,  # number of classes
+                 n_classes: int,  # number of classes
+                 out_dim: int,  # output dimentions
                  normalize: bool,  # normalize input
                  softness: tuple,  # softness of attention
                  channels: tuple,  # convolutional channels
@@ -208,15 +209,17 @@ class AttentionModel(torch.nn.Module):
                  task_bias: bool = True,  # whether to bias the deconvolutional layers with task embedding
                  task_funs: Callable = None,  # activation function for task embedding
                  rnn_to_fc: bool = False,  # whether to use RNN layers or MLP layers
-                 out_ext: bool = False,  # whether the output is extended or the same size as out_dim
                  rnn_cat: bool = False,  # whether to concatenate the forward and backward RNN outputs
-                 use_bridges: bool = False,  # whether to use a bridge between the encoder and decoder
+                 use_bridges: bool = False,  # whether to use a fancy bridge between the encoder and decoder
                  ):
         super().__init__()
         self.normalize = normalize
         self.in_dims = in_dims
-        assert len(in_dims) == 3, "Input dimensions should be 3D: C x H x W"
-        assert in_dims[0] == channels[0], "Input channels should match the first convolutional layer"
+        self.out_dim = out_dim
+        self.n_classes = n_classes
+        assert self.out_dim >= self.n_classes, "Output dimensions should be greater than the number of classes!"
+        assert len(in_dims) == 3, "Input dimensions should be 3D: C x H x W !"
+        assert in_dims[0] == channels[0], "Input channels should match the first convolutional layer!"
         self.channels = channels
         self.n_convs = len(self.channels) - 1
         self.residuals = list(obj_to_tuple(residuals, self.n_convs))
@@ -237,7 +240,6 @@ class AttentionModel(torch.nn.Module):
         self.rnn_bias = obj_to_tuple(rnn_bias, self.n_rnns)
         self.rnn_dropouts = obj_to_tuple(rnn_dropouts, self.n_rnns)
         self.rnn_funs = obj_to_tuple(rnn_funs, self.n_rnns)
-        self.out_dims = out_dims
         self.n_tasks = n_tasks
         self.task_dim = self.n_tasks if self.n_tasks > 1 else 0
         self.norm_mean = [0.485, 0.456, 0.406] if norm_mean is None else norm_mean
@@ -248,7 +250,6 @@ class AttentionModel(torch.nn.Module):
         self.task_funs = task_funs if self.n_tasks > 1 else None
         self.conv_dims = [self.in_dims]
         self.rnn_to_fc = rnn_to_fc
-        self.out_ext = out_ext
         self.rnn_cat = rnn_cat
         self.use_bridges = use_bridges
         self.bridge_norm = "layer"
@@ -292,8 +293,8 @@ class AttentionModel(torch.nn.Module):
                                                 self.rnn_bias[i], 
                                                 self.rnn_dropouts[i], 
                                                 self.rnn_funs[i]))
-        self.fc_out = torch.nn.Linear(self.rnn_dims[-1], self.out_dims * (2 if self.out_ext else 1))
-        self.fc_in = torch.nn.Linear(self.task_dim + self.out_dims * (2 if self.out_ext else 1), self.rnn_dims[-1])
+        self.fc_out = torch.nn.Linear(self.rnn_dims[-1], out_dim)
+        self.fc_in = torch.nn.Linear(self.task_dim + out_dim, self.rnn_dims[-1])
         for i in range(1, self.n_rnns + 1):
             if self.rnn_to_fc:
                 self.brnn_blocks.append(VanillaLayer(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), 
@@ -361,7 +362,7 @@ class AttentionModel(torch.nn.Module):
         act_.append(torch.empty(n_iter, batch_size, self.rnn_dims[0]).to(device))
         for i in range(self.n_rnns):
             act_.append(torch.empty(n_iter, batch_size, self.rnn_dims[i+1]).to(device))
-        labels_ = torch.empty(n_iter, batch_size, self.out_dims).to(device)
+        labels_ = torch.empty(n_iter, batch_size, self.n_classes).to(device)
         return masks_, act_, labels_
 
     def forward(self, x: torch.Tensor, t: int = None, y: torch.Tensor = None):
@@ -404,8 +405,8 @@ class AttentionModel(torch.nn.Module):
 
             # output and input prompt layer
             h = self.fc_out(h)
-            labels_[r] = h[:, :self.out_dims] if self.out_ext else h
-            h = h if y is None else torch.cat([y[r], h[:, self.out_dims:]], dim=1)
+            labels_[r] = h[:, :self.n_classes]
+            h = h if y is None else torch.cat([y[r], h[:, self.n_classes:]], dim=1)
             h = h if t is None else torch.cat([h, th], 1) if self.n_tasks > 1 else h
 
             # backward recurrent layers
@@ -473,7 +474,7 @@ class AttentionModel(torch.nn.Module):
 
         # output
         h = self.fc_out(h)
-        labels_ = h[:, :self.out_dims] if self.out_ext else h
+        labels_ = h[:, :self.n_classes]
         
         return labels_, act_
 
@@ -511,8 +512,8 @@ class AttentionModel(torch.nn.Module):
 
         # output and input prompt layer
         h = self.fc_out(h)
-        labels_ = h[:, :self.out_dims] if self.out_ext else h
-        h = h if y is None else torch.cat([y, h[:, self.out_dims:]], dim=1)
+        labels_ = h[:, :self.n_classes]
+        h = h if y is None else torch.cat([y, h[:, self.n_classes:]], dim=1)
         h = h if t is None else torch.cat([h, th], 1) if self.n_tasks > 1 else h
 
         # backward recurrent layers
