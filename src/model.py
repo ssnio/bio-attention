@@ -173,6 +173,7 @@ class AttentionModel(torch.nn.Module):
                  rnn_to_fc: bool = False,  # whether to use RNN layers or MLP layers
                  rnn_cat: bool = False,  # whether to concatenate the forward and backward RNN outputs
                  use_bridges: bool = False,  # whether to use a fancy bridge between the encoder and decoder
+                 trans_fun: Callable = torch.nn.Identity(),  # the activation function between convolutional and RNN layers
                  ):
         super().__init__()
         self.normalize = normalize
@@ -215,6 +216,7 @@ class AttentionModel(torch.nn.Module):
         self.rnn_cat = rnn_cat
         self.use_bridges = use_bridges
         self.bridge_norm = "layer"
+        self.trans_fun = trans_fun
         assert use_bridges is False or isinstance(conv_funs, torch.nn.Tanh)
         self.conv_blocks = torch.nn.ModuleList()
         self.frnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
@@ -244,7 +246,7 @@ class AttentionModel(torch.nn.Module):
         self.conv_frnn = torch.nn.Sequential(
             torch.nn.Flatten(),
             torch.nn.Linear(self.flat_dim, self.rnn_dims[0], bias=self.rnn_bias[0]),
-            self.rnn_funs[0]
+            self.trans_fun,
         )
         
         for i in range(self.n_rnns):
@@ -275,7 +277,7 @@ class AttentionModel(torch.nn.Module):
                                                     self.rnn_funs[-i]))
         self.brnn_deconv = torch.nn.Sequential(
             torch.nn.Linear(self.rnn_dims[0], self.flat_dim, bias=self.rnn_bias[0]),
-            self.rnn_funs[0],
+            self.trans_fun,
             torch.nn.Unflatten(1, self.conv_dims[-1]),
         )
         for i in range(1, self.n_convs + 1):
