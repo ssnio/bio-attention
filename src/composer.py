@@ -1699,3 +1699,116 @@ class CelebGlasses(Dataset):
         x = torch.clamp(x, 0.0, 1.0)
         return do_n_it(x, self.n_iter), do_n_it(y.item(), self.n_iter), 0, 0, 0
     
+
+class SwitchBox(Dataset):
+    def __init__(self,
+                 n_samples: int,
+                 fix_attend_saccade: tuple,
+                 ydim: int,
+                 xdim: int,
+                 padding: int,
+                 resolution: int = 100,
+                 noise: float = 0.25,
+                 training: bool = True):
+        super().__init__()
+        self.kernel = 3
+        self.bezier_order = 2
+        self.n_samples = n_samples  # number of samples
+        self.n_fixate, self.n_stimulus, self.n_saccade = fix_attend_saccade
+        self.n_iter = sum(fix_attend_saccade)
+        self.pad = padding
+        self.resolution = resolution
+        self.noise = noise
+        self.training = training
+        self.ydim, self.height = ydim, ydim + 2 * self.pad
+        self.xdim, self.width = xdim, xdim + 2 * self.pad
+        self.stimulus_kernel = torch.ones(1, 1, self.kernel, self.kernel)
+        self.fixate_kernel = torch.ones(1, 1, self.kernel + 2, self.kernel + 2)
+        self.saccade_kernel = torch.ones(1, 1, self.kernel + 2, self.kernel + 2)
+        self.samples = None
+        self.generate_bezier_samples()
+
+    def build_valid_test(self):
+        self.noise = 0.0
+
+    def generate_bezier_samples(self):
+        self.samples = torch.zeros(self.n_samples, 3, 1, self.height, self.width)
+        t_ = torch.linspace(0., 1.0, self.resolution)  # parameter
+        c_ = torch.rand(self.n_samples, self.bezier_order + 1, 2, 1)  # coordinates
+        for i in range(self.n_samples):
+            im_ = torch.zeros(3, 1, self.ydim, self.xdim)
+            b_ = bezier_generator(c_[i], t_)  # Bezier curve
+            b_h, b_w = (b_[0] * self.ydim).int().tolist(), (b_[1] * self.xdim).int().tolist()
+            im_[0, :, b_h, b_w] = 1.0
+            im_[1, :, b_h[0], b_w[0]] = 1.0
+            im_[2, :, b_h[-1], b_w[-1]] = 1.0
+            im_[0] = (conv2d(im_[0], self.stimulus_kernel, padding='same') > 0.0)
+            im_[1] = (conv2d(im_[1], self.fixate_kernel, padding='same') > 0.0)
+            im_[2] = (conv2d(im_[2], self.saccade_kernel, padding='same') > 0.0)
+            self.samples[i] = torch.nn.functional.pad(im_, [self.pad]*4, mode='constant', value=0.0)
+        return True
+
+    def __len__(self):
+        return self.n_samples
+    
+    def __getitem__(self, i):
+        target = self.samples[i]
+        distractor = self.samples[torch.randint(0, self.n_samples, (1,)).item()]
+        if random.choices([True, False]):
+            target = transforms.functional.rotate(target, random.choice((0, 90, 180, 270)))
+        if random.choices([True, False]):
+            distractor = transforms.functional.rotate(distractor, random.choice((0, 90, 180, 270)))
+
+        target_fixation, target_saccade = torch.randperm(2) + 1
+        distractor_fixation, distractor_saccade = torch.randperm(2) + 1
+
+        # pre-allocation
+        target_composites = torch.zeros(self.n_iter, 1, self.height, self.width)
+        distractor_composites = torch.zeros(self.n_iter, 1, self.height, self.width)
+        rec_fields = torch.zeros(1, self.height, self.width)
+        masks = torch.zeros(self.n_iter, 1, self.height, self.width)
+        components = torch.zeros(6, 1, self.height, self.width)
+
+        # receptive field
+        rec_fields = target[0] * (1.0 - 1.0 * ((target[1] + target[2] + distractor.sum(dim=0)) > 0.0))
+
+        # building composite
+        # target_composites[:self.n_fixate, 1:] += target[target_fixation]  # fixation point
+        target_composites[:self.n_fixate] += target[target_fixation]  # fixation point
+        target_composites[self.n_fixate:-self.n_saccade] += (target[0] + distractor[0])  # stimulus
+        # target_composites[-self.n_saccade:, 1:] += target[target_saccade] + distractor[distractor_saccade] # saccade points
+        target_composites[-self.n_saccade:] += target[target_saccade] + distractor[distractor_saccade] # saccade points
+        target_composites = torch.clamp(target_composites, 0.0, 1.0)
+
+        # distractor_composites[:self.n_fixate, 1:] += distractor[distractor_fixation]  # fixation point
+        distractor_composites[:self.n_fixate] += distractor[distractor_fixation]  # fixation point
+        distractor_composites[self.n_fixate:-self.n_saccade] += (target[0] + distractor[0])  # stimulus
+        # distractor_composites[-self.n_saccade:, 1:] += target[target_saccade] + distractor[distractor_saccade]  # circles
+        distractor_composites[-self.n_saccade:] += target[target_saccade] + distractor[distractor_saccade]  # circles
+        distractor_composites = torch.clamp(distractor_composites, 0.0, 1.0)
+
+        # building masks
+        masks[:self.n_fixate] += target[target_fixation]
+        masks[self.n_fixate:-self.n_saccade] += target[0]
+        masks[-self.n_saccade:] += target[target_saccade]
+        masks = torch.clamp(masks, 0.0, 1.0)
+        masks = 2.0 * (masks - 0.5)
+
+        # noise
+        target_composites += self.noise * torch.rand(1) * torch.randn_like(target_composites)
+        target_composites = torch.clamp(target_composites, 0.0, 1.0)
+        distractor_composites += self.noise * torch.rand(1) * torch.randn_like(distractor_composites)
+        distractor_composites = torch.clamp(distractor_composites, 0.0, 1.0)
+
+        # components
+        components[0] = target[target_fixation]
+        components[1] = target[0]
+        components[2] = target[target_saccade]
+        components[3] = distractor[distractor_fixation]
+        components[4] = distractor[0]
+        components[5] = distractor[distractor_saccade]
+
+        if self.training:
+            return target_composites, 0, masks, 0, 0  # do_n_it(y.item(), self.n_iter)
+        else:
+            return target_composites, distractor_composites, masks, rec_fields, components
