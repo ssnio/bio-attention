@@ -37,13 +37,15 @@ class AttentionTrain:
                  tasks: dict, 
                  logger: Logger, 
                  results_folder: str,
-                 max_grad_norm: float = 10.0):
+                 max_grad_norm: float = 10.0,
+                 save_intermediate: bool = False):
         self.model = model
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.tasks = tasks
         self.logger = logger
         self.results_folder = results_folder
+        self.save_intermediate = save_intermediate
         self.k_tasks = list(tasks.keys())
         self.n_k_tasks = len(self.k_tasks)
         if self.model.n_tasks > 1:
@@ -116,8 +118,9 @@ class AttentionTrain:
                     self.optimizer.step()
                     self.optimizer.zero_grad(set_to_none=True)
             # save the model and optimizer
-            torch.save(self.model.state_dict(), os.path.join(self.results_folder, f"model_{epoch}_" + ".pth"))
-            torch.save(self.optimizer.state_dict(), os.path.join(self.results_folder, f"optimizer_{epoch}_" + ".pth"))
+            if self.save_intermediate:
+                torch.save(self.model.state_dict(), os.path.join(self.results_folder, f"model_{epoch}_" + ".pth"))
+                torch.save(self.optimizer.state_dict(), os.path.join(self.results_folder, f"optimizer_{epoch}_" + ".pth"))
             # update the scheduler
             self.scheduler.step()
 
