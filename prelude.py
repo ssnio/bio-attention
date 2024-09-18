@@ -41,15 +41,17 @@ def startup_folders(dir: str, name: str = None):
         print(f"{dir} was created!")
 
     # # create folder for results
-    folder_id = str(int(time.time()))
-    results_folder = os.path.join(dir, folder_id)
+    folder_id = int(time.time())
+    results_folder = os.path.join(dir, str(folder_id))
+    while os.path.exists(results_folder):
+        folder_id += 1
+        results_folder = os.path.join(dir, str(folder_id))
     os.makedirs(results_folder)
     print(f"{results_folder} was created!")
 
     # # setup logger
-    logger = setup_logger(results_folder, name, folder_id)
+    logger = setup_logger(results_folder, name, str(folder_id))
     return results_folder, logger
-
 
 def save_dicts(dicts, dir, name, logger):
     for k, v in dicts.items():
