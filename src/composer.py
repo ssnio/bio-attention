@@ -1812,3 +1812,92 @@ class SwitchBox(Dataset):
             return target_composites, 0, masks, 0, 0  # do_n_it(y.item(), self.n_iter)
         else:
             return target_composites, distractor_composites, masks, rec_fields, components
+
+
+class ArrowCur_DS(Dataset):
+    def __init__(self,
+                 mnist_dataset: Dataset,  # MNIST datasets
+                 n_iter: tuple,  # number of iterations
+                 noise: float = 0.25,  # noise scale
+                 directory: str = r"./data/",  # directory of the arrow images
+                 ):
+        
+        super().__init__()
+        assert n_iter >= 3
+        self.directory = os.path.join(directory, "arrows")
+        self.dataset = mnist_dataset
+        self.n_iter = n_iter
+        self.noise = noise
+        self.pad = 2
+        self.c, h, w = self.dataset[0][0].shape
+        self.h, self.w = 96, 96
+        self.transform = transforms.Pad(self.pad)
+        self.n_classes = 10
+        self.class_ids = get_classes(self.dataset, 10)
+        self.arrows = self.get_arrows()
+        self.arrow_pos = [5, 0, 4,
+                          2,    1,
+                          7, 3, 6]
+        self.digit_pos = [(0,  0), (0,  32), (0,  64),
+                          (32, 0),           (32, 64),
+                          (64, 0), (64, 32), (64, 64)]
+
+    def rand_sample(self, y: int, exclude: bool = False):
+        if exclude:
+            t = list(range(10))
+            t.remove(y)
+            cls = random.choice(t)
+        else:
+            cls = y
+        i = self.class_ids[cls][torch.randint(0, len(self.class_ids[cls]), (1, )).item()]
+        return self.dataset.__getitem__(i)
+
+    def get_arrows(self):
+        arrows = torch.zeros(8, 1, 32, 32)
+        for i, file in enumerate(["n", "e", "w", "s", "ne", "nw", "se", "sw"]):
+            arrows[i, :, 1:-1, 1:-1] = 1.0 * (transforms.ToTensor()(PILImage.open(os.path.join(self.directory, f"{file}.png")))[0] > 0.0)
+        return arrows
+
+    def build_valid_test(self):
+        self.noise = 0.0
+
+    def __len__(self):
+        return self.dataset.__len__()
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset.__getitem__(idx)
+        x = self.transform(x)
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = torch.zeros(2, 3, self.h, self.w)
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        rgbs = torch.rand(9, 3, 1, 1)
+        labels[:] = y
+        hot_labels = 0
+        b_rgb = torch.rand(3, 1, 1) * 0.5
+
+        t = random.choice(range(8))
+        arrow_i, pos_ij = self.arrow_pos[t], self.digit_pos[t]
+        components[0, :, 32:64, 32:64] = self.arrows[arrow_i] * rgbs[0]
+        components[1, :, pos_ij[0]:pos_ij[0]+32, pos_ij[1]:pos_ij[1]+32] = x * rgbs[1]
+        masks[:, :, pos_ij[0]:pos_ij[0]+32, pos_ij[1]:pos_ij[1]+32] += x
+        j = 2
+        for i in range(8):
+            if i != t:
+                x, _ = self.rand_sample(y, exclude=True)
+                x = self.transform(x)
+                pos_ij = self.digit_pos[i]
+                components[1, :, pos_ij[0]:pos_ij[0]+32, pos_ij[1]:pos_ij[1]+32] = x * rgbs[j]
+                j += 1
+        
+        composites[0] = (components[0]) + (1.0 - components[0]) * b_rgb
+        composites[1:-1] = (components[0] + components[1]) + (1.0 - (components[0] + components[1])) * b_rgb
+        composites[-1] = components[1] + (1.0 - components[1]) * b_rgb
+        # adding noise and clamping
+        composites, masks = routine_01(composites, masks, self.noise)
+
+        return composites, labels, masks, components, hot_labels
+
+
