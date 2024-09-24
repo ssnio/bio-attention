@@ -144,3 +144,29 @@ def get_ior_match(one_: torch.Tensor, all_: torch.Tensor):
     """returns the index of the most similar element in all_ to one_
     """
     return (all_ * one_).sum(dim=(-2, -1)).max(dim=1).indices[:, 0]
+
+
+def get_dims(x: tuple, layer: torch.nn.Module):
+    """ unnecessarily complicated way to
+    calculate the output height and width size for a Conv2D/or/MaxPool2d
+
+    Args:
+        x (tuple): input size
+        layer (nn.Conv2d, nn.MaxPool2d): the Conv2D/or/MaxPool2d layer
+
+    returns:
+        (int): output shape as given in
+        https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
+    """
+    p = layer.padding if isinstance(layer.padding, (tuple, list)) else (layer.padding,)
+    k = layer.kernel_size if isinstance(layer.kernel_size, (tuple, list)) else (layer.kernel_size,)
+    s = layer.stride if isinstance(layer.stride, (tuple, list)) else (layer.stride,)
+    x = x if isinstance(x, (tuple, list)) else [x]
+    x = x[-2:] if len(x) > 2 else x
+    if isinstance(layer, (torch.nn.Conv2d, torch.nn.MaxPool2d)):
+        d = layer.dilation if isinstance(layer.dilation, (tuple, list)) else (layer.dilation,)
+        return (1 + (x[0] + 2 * p[0] - (k[0] - 1) * d[0] - 1) // s[0],
+                1 + (x[-1] + 2 * p[-1] - (k[-1] - 1) * d[-1] - 1) // s[-1])
+    elif isinstance(layer, torch.nn.AvgPool2d):
+        return (1 + (x[0] + 2 * p[0] - k[0]) // s[0],
+                1 + (x[-1] + 2 * p[-1] - k[-1]) // s[-1])
