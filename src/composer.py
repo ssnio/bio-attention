@@ -402,11 +402,6 @@ class Recognition_DS(Dataset):
         x, y = self.dataset.__getitem__(idx)
         x = self.transform(x)
         
-        digit_color = torch.rand(3, 1, 1)
-        obstacle_color = 1 - digit_color
-        digit_color /= digit_color.max()
-        obstacle_color /= obstacle_color.max()
-        
         # pre-allocation
         composites = torch.zeros(self.n_iter, 3, self.h, self.w)
         components = 0
