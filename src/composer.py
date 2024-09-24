@@ -3,6 +3,7 @@ import random
 import os
 from typing import Callable, Union
 import math
+import csv
 # # Torch modules
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -1896,3 +1897,233 @@ class ArrowCur_DS(Dataset):
         return composites, labels, masks, components, hot_labels
 
 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+def routine_02(composites: torch.Tensor, masks: torch.Tensor, noise: float = 0.0):
+    # adding noise and clamping 
+    composites += torch.rand(1) * noise * (torch.rand_like(composites) - 0.5)
+    composites = torch.clamp(composites, 0.0, 1.0)
+    masks = torch.clamp(masks, 0.0, 1.0)
+    masks = 2.0 * (masks - 0.5)
+    return composites, masks
+
+
+def read_ATFMNIST_csv(directory: str, labels: list, save: bool = False):
+    "Only for the AlphabetTypeFaceMNIST csv file!!!!"
+    data = [[] for _ in labels]
+    name = "".join(['D', 'G', 'O', 'Q', 'P', 'R', 'B', 'A', 'S'])
+    with open(directory, newline='') as f:
+        reader = csv.reader(f)
+        data_list = list(reader)
+    for x in data_list[1:]:  # skip the header
+        if str(x[1]) in labels:
+            i = labels.index(str(x[1]))
+            data[i].append([torch.tensor([float(v) for v in x[2:]]).reshape(28, 28).numpy() / 255.0])
+    data = torch.tensor(data)
+
+    r = [random.sample(list(range(2874)), 2874) for x in range(9)]
+    test_data = data[0:1, r[0][:200], :, :]
+    for i in range(1, 9):
+        test_data = torch.cat((test_data, data[i:i+1, r[i][:200], :, :]), dim=0)
+
+    valid_data = data[0:1, r[0][200:400], :, :]
+    for i in range(1, 9):
+        valid_data = torch.cat((valid_data, data[i:i+1, r[i][200:400], :, :]), dim=0)
+
+    train_data = data[0:1, r[0][400:], :, :]
+    for i in range(1, 9):
+        train_data = torch.cat((train_data, data[i:i+1, r[i][400:], :, :]), dim=0)
+    if save:
+        torch.save(data, directory.replace('.csv', '_'+name+'.pt'))
+        torch.save(test_data, directory.replace('.csv', '_'+name+'_test.pt'))
+        torch.save(valid_data, directory.replace('.csv', '_'+name+'_valid.pt'))
+        torch.save(train_data, directory.replace('.csv', '_'+name+'_train.pt'))
+
+    return data, test_data, valid_data, train_data
+
+
+class Patterns:
+    def __init__(self, h: int, w: int):
+        self.h, self.w = h, w
+        self.patterns = []
+        self.patterns.append(self.pattex())
+        self.patterns.append(self.p_salt_pepper())
+        self.patterns.append(self.p_pink().unsqueeze(0))
+        self.n_patterns = len(self.patterns)
+
+    def pattex(self):
+        p = torch.randint(0, 2, (1, 4, 4)).float()
+        p = p.repeat(1, 2+self.h//4, 2+self.w//4)[:, :self.h, :self.w]
+        return p
+
+    def p_pink(self):
+        x = pink((self.h, self.w), c=2.7, a=0.7, actfun=torch.cos)
+        x = 0.5 + 0.5 * x
+        return x
+
+    def p_salt_pepper(self, p=0.5):
+        return 1.0 * (torch.rand(1, self.h, self.w) < p)
+
+    def __len__(self):
+        return self.n_patterns
+
+    def __getitem__(self, i):
+        return self.patterns[i]
+
+
+class Colors:
+    def __init__(self, intensity: float = 0.75, noise: float = 0.0):
+        self.ci = intensity  # color intensity
+        self.noise = noise
+        self.colors = []
+        self.colors.append(torch.tensor([self.ci, 0.0, 0.0]).view(3, 1, 1))  # red
+        self.colors.append(torch.tensor([0.0, self.ci, 0.0]).view(3, 1, 1))  # green
+        self.colors.append(torch.tensor([0.0, 0.0, self.ci]).view(3, 1, 1))  # blue
+        self.n_colors = len(self.colors)
+
+    def __len__(self):
+        return self.n_colors
+
+    def __getitem__(self, i):
+        c = self.colors[i] + self.noise * (torch.rand(3, 1, 1) - 0.5)
+        c = torch.clamp(c, 0.0, 1.0)
+        return c
+
+
+class Alphabets:
+    def __init__(self, directory: str, kind: str = 'train'):
+        self.labels = ['D', 'G', 'O', 'Q', 'P', 'R', 'B', 'A', 'S']
+        self.alpha = "".join(self.labels)
+        self.kind = kind
+        self.directory = os.path.join(directory, f'treisman_alpha/AlphabetTypeFaceMNIST_{self.alpha}_{self.kind}.pt')
+        assert os.path.exists(self.directory)
+        self.data = torch.load(self.directory)
+        self.n_classes, self.n_samples = self.data.shape[:2]
+
+    def get_cls(self, y: int):
+        i = random.randint(0, self.n_samples-1)
+        return self.data[y][i]
+
+    def get_cls_not(self, y: int):
+        all_except_y = list(j for j in range(self.n_classes) if j != y)
+        not_y = random.choice(all_except_y)
+        i = random.randint(0, self.n_samples-1)
+        return self.data[not_y][i], not_y
+
+    def get_instance(self, y: int, i: int):
+        return self.data[y][i]
+    
+    def __len__(self):
+        return self.n_classes * self.n_samples
+
+
+class Treisman(Dataset):
+    def __init__(self, 
+                 alpha_ds: Alphabets,
+                 in_dims: tuple,
+                 n_iter: int, 
+                 n_samples: int,
+                 kind: str = 'train',
+                 spurious_ratio: float = 0.9,
+                 digit_intensity: float = 0.75,
+                 noise: float = 0.0,
+                 spurious_background: int = None,
+                 spurious_class: int = None,
+                 spurious_alpha: bool = False,
+                 ):
+        super().__init__()
+        assert alpha_ds.kind == kind
+        self.in_dims = in_dims
+        self.c, self.h, self.w = self.in_dims
+        self.alpha_ds = alpha_ds
+        self.kind = kind
+        self.patterns_ds = Patterns(self.h, self.w)
+        self.colors_ds = Colors(intensity=0.75, noise=0.25)
+        self.n_iter = n_iter
+        self.n_samples = n_samples if n_samples > 0 else len(self.alpha_ds)
+        self.spurious_ratio = spurious_ratio
+        self.noise = noise
+        self.di = digit_intensity
+        self.spurious_background = spurious_background
+        self.spurious_class = spurious_class
+        self.spurious_alpha = spurious_alpha
+        self.pad = transforms.Pad((2, 2))
+        self.transform = transforms.Compose([
+            transforms.RandomRotation(15),
+        ])
+        self.grid = [(0 , 0), (0 , 32), (0 , 64), 
+                     (32, 0), (32, 32), (32, 64), 
+                     (64, 0), (64, 32), (64, 64)]
+
+    def chop_4(self, x):
+        z = torch.zeros(4, 32, 32)
+        z[0, :16, :16] = x[0, :16, :16]
+        z[1, :16, 16:] = x[0, :16, 16:]
+        z[2, 16:, :16] = x[0, 16:, :16]
+        z[3, 16:, 16:] = x[0, 16:, 16:]
+        return z
+    
+    def chop_2(self, x):
+        z = torch.zeros(4, 32, 32)
+        z[0, :16, :] = x[0, :16, :]
+        z[1, 16:, :] = x[0, 16:, :]
+        z[2, :, :16] = x[0, :, :16]
+        z[3, :, 16:] = x[0, :, 16:]
+        return z
+
+    def place_in_grid(self, x):
+        assert x.shape == (9, 1, 32, 32)
+        z = torch.zeros(1, 96, 96)
+        m = torch.zeros(1, 96, 96)
+        r = random.sample(range(9), 9)
+        for i, j in enumerate(r):
+            z[0, self.grid[i][0]:self.grid[i][0]+32, self.grid[i][1]:self.grid[i][1]+32] = x[j]
+            if j == 0:
+                m[0, self.grid[i][0]:self.grid[i][0]+32, self.grid[i][1]:self.grid[i][1]+32] = x[j]
+        return z, m
+
+    def class_to_background(self, y):
+        if self.spurious_background is None:
+            if self.spurious_ratio == 0.0:
+                return torch.zeros(3, self.h, self.w)
+            elif random.random() < self.spurious_ratio:
+                c, p = divmod(y, 3)
+            else:
+                c = random.randint(0, self.colors_ds.n_colors-1)
+                p = random.randint(0, self.patterns_ds.n_patterns-1)
+        else:
+            c, p = divmod(self.spurious_background, 3)
+        return self.patterns_ds[p] * self.colors_ds[c]
+
+    def __len__(self):
+        return self.n_samples if self.kind == 'train' else len(self.alpha_ds)
+    
+    def __getitem__(self, idx):
+        if self.kind == 'train':
+            y = random.randint(0, self.alpha_ds.n_classes-1)
+            x = self.alpha_ds.get_cls(y)
+        else:
+            y, i = divmod(idx, self.alpha_ds.n_samples)
+            x = self.alpha_ds.get_instance(y, i)
+        if self.spurious_alpha:
+            not_x, not_y = self.alpha_ds.get_cls_not(y if self.spurious_class is None else self.spurious_class)
+        else:
+            not_x, not_y = torch.zeros(1, 28, 28), None
+        x = self.pad(x)
+        not_x = self.pad(not_x)
+        chopped_not_x = torch.cat([self.chop_4(not_x), self.chop_2(not_x)], dim=0)
+        x_and_not_x = torch.cat([x, chopped_not_x], dim=0).unsqueeze(1)
+        x_grid, m = self.place_in_grid(x_and_not_x)
+        background = self.class_to_background(y)
+        drgb = torch.rand(3, 1, 1)
+        
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = 0
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = 0
+
+        composites[:] = (x_grid * drgb * self.di) + (1.0 - x_grid) * background
+        labels[:] = y
+        masks[:] = m
+        composites, masks = routine_02(composites, masks, self.noise)
+        return composites, labels, masks, components, hot_labels
