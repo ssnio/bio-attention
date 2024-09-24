@@ -2083,7 +2083,7 @@ class Treisman(Dataset):
 
     def class_to_background(self, y):
         if self.spurious_background is None:
-            if self.spurious_ratio == 0.0:
+            if self.spurious_ratio < 0.0:
                 return torch.zeros(3, self.h, self.w)
             elif random.random() < self.spurious_ratio:
                 c, p = divmod(y, 3)
