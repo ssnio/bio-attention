@@ -124,8 +124,8 @@ class DeConvBlock(torch.nn.Module):
                  ):
         super().__init__()
 
-        padding = 1 if padding == 'same' else 0
-        self.upsample = torch.nn.Upsample(scale_factor=upsample)
+        padding = 1 if padding in ('same', 1) else 0
+        self.upsample = torch.nn.Upsample(size=upsample)
         self.deconv = torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding=padding, bias=bias)
         self.norm = makenorm(norm, out_channels, False)
         self.dropout = torch.nn.Dropout2d(dropout) if dropout > 0.0 else None
@@ -239,9 +239,9 @@ class AttentionModel(torch.nn.Module):
                                               self.residuals[i],
                                               False if i < self.n_convs - 1 else True
                                               ))
-            self.conv_dims.append((self.channels[i+1],
-                                   self.conv_dims[-1][1] // self.pools[i], 
-                                   self.conv_dims[-1][2] // self.pools[i]))
+            c, (h, w) = self.channels[i+1], get_dims(self.conv_dims[-1], self.conv_blocks[-1].conv)
+            h, w = h // self.pools[i], w // self.pools[i]
+            self.conv_dims.append((c, h, w))
         self.flat_dim = self.conv_dims[-1][0] * self.conv_dims[-1][1] * self.conv_dims[-1][2]
         self.conv_frnn = torch.nn.Sequential(
             torch.nn.Flatten(),
@@ -288,12 +288,12 @@ class AttentionModel(torch.nn.Module):
                     if self.task_bias:
                         self.embed_blocks_b.append(torch.torch.nn.Embedding(self.n_tasks, 2 * self.channels[-i]))
                         torch.nn.init.zeros_(self.embed_blocks_b[-1].weight)
-            self.deconv_blocks.append(DeConvBlock(self.pools[-i],
+            self.deconv_blocks.append(DeConvBlock(self.conv_dims[-i-1][-2:],
                                                   2 * self.channels[-i], 
                                                   self.channels[-i-1] if i < self.n_convs else 1,
                                                   self.kernels[-i],
                                                   self.strides[-i],
-                                                  self.paddings[-i],
+                                                  'same',
                                                   self.conv_bias[-i],
                                                   self.deconv_norms[-i],
                                                   self.conv_dropouts[-i],
