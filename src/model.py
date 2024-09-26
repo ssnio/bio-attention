@@ -7,13 +7,13 @@ from torchvision.transforms.functional import normalize
 from .utils import obj_to_tuple
 
 
-def makenorm(kind: str, n_channels: int, trs: bool = False):
+def makenorm(kind: str, n_channels: int, trs: bool = False, aff: bool = True):
     if kind == 'batch':
-        return torch.nn.BatchNorm2d(n_channels, track_running_stats=trs)
+        return torch.nn.BatchNorm2d(n_channels, affine=aff, track_running_stats=trs)
     elif kind == 'layer':
-        return torch.nn.GroupNorm(1, n_channels, eps=1e-6, affine=True)
+        return torch.nn.GroupNorm(1, n_channels, affine=aff)
     elif kind == 'instance':
-        return torch.nn.InstanceNorm2d(n_channels, track_running_stats=trs)
+        return torch.nn.InstanceNorm2d(n_channels, affine=aff, track_running_stats=trs)
     elif kind is None:
         return torch.nn.Identity()
     else:
