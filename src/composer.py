@@ -2159,3 +2159,111 @@ class Shapes:
             return self.solid_shapes[i]
         else:
             return self.shape_outlines[i]
+    
+
+class ShapeColorTexture(Dataset):
+    def __init__(self, 
+                 directory: str,
+                 in_dims: tuple,
+                 n_iter: int, 
+                 n_samples: int,
+                 task: int,
+                 kind: str = 'train',
+                 noise: float = 0.0,
+                 spurious_ratio: float = 0.8,
+                 outline_ratio: float = 0.1,
+                 spurious_background: bool = False,
+                 spurious_color: bool = False,
+                 ):
+        super().__init__()
+        self.directory = directory
+        assert os.path.exists(directory), f"Directory {directory} does not exist!"
+        self.in_dims = in_dims
+        self.c, self.h, self.w = self.in_dims
+        self.n_iter = n_iter
+        self.n_samples = n_samples
+        self.task = task
+        self.kind = kind
+        self.noise = noise if kind == 'train' else 0.0
+        self.shape_ds = Shapes(directory, h=60, w=60)
+        self.colors_ds = Colors(intensity=0.80, noise=(0.30 if kind == 'train' else 0.0))
+        self.spurious_ratio = spurious_ratio
+        self.outline_ratio = outline_ratio
+        self.spurious_background = spurious_background
+        self.spurious_color = spurious_color
+        self.transform = transforms.Compose([
+            transforms.Pad(18),
+            transforms.RandomAffine(degrees=90, translate=(0.25, 0.25), scale=(0.7, 1.2)),
+        ])
+
+    def get_texture(self, i: int, h: int = None, w: int = None):
+        h = self.h if h is None else h
+        w = self.w if w is None else w
+        if i == 0:  # repetative pattern
+            px = torch.randint(0, 2, (1, 4, 4)).float()
+            px = px.repeat(1, 2+h//4, 2+w//4)[:, :h, :w]
+        elif i == 1:  # correlated noise
+            px = pink((h, w), c=2.7, a=0.7, actfun=torch.cos)
+            px = 0.5 + 0.5 * px
+        elif i == 2:  # random salt and pepper noise
+            px = 1.0 * (torch.rand(1, h, w) < 0.5)
+        else:  # solid color
+            px = torch.ones(1, h, w)
+        return px
+
+    def get_solid(self, i: int):
+        s = self.shape_ds.__getitem__(i, solid=True)
+        s = self.transform(s)
+        return s
+
+    def get_outline(self, i: int):
+        s = self.shape_ds.__getitem__(i, solid=True)
+        o = self.shape_ds.__getitem__(i, solid=False)
+        so_ = torch.cat([s, o], dim=0)
+        so_ = self.transform(so_)
+        return so_
+
+    def get_rand_i(self):
+        s_i, c_i, t_i = torch.randint(0, 3, (3,))
+        if self.spurious_color and random.random() < self.spurious_ratio:
+            c_i = s_i
+        elif self.spurious_background and random.random() < self.spurious_ratio:
+            t_i = s_i
+        return s_i, c_i, t_i
+
+    def get_shape_outline(self, i):
+        s = self.shape_ds.__getitem__(i, solid=True)
+        if random.random() < self.outline_ratio:
+            o = self.shape_ds.__getitem__(i, solid=False)
+        else:
+            o = torch.zeros_like(s)
+        so_ = torch.cat([s, o], dim=0)
+        so_ = self.transform(so_)
+        s, o = so_[:1], so_[1:]
+        return s, o
+
+    def __len__(self):
+        return self.n_samples
+    
+    def __getitem__(self, idx):
+        s_i, c_i, t_i = self.get_rand_i()
+        y = [s_i, c_i, t_i][self.task]
+        
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = 0
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = 0
+
+        background_color = self.colors_ds.__getitem__(c_i)
+        background_texture = self.get_texture(-1)
+        shape_color = torch.rand(3, 1, 1)
+        shape_texture = self.get_texture(t_i)
+        shape, outline = self.get_shape_outline(s_i)
+        b_ = background_color * background_texture
+        s_ = shape_color * shape_texture * shape
+        masks[:] = shape
+        labels[:] = y
+        composites[:] = s_ + (1 - shape) * b_ + outline
+        composites, masks = routine_02(composites, masks, self.noise)
+        return composites, labels, masks, components, hot_labels
