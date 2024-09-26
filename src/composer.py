@@ -2045,23 +2045,23 @@ class Treisman(Dataset):
         self.c, self.h, self.w = self.in_dims
         self.alpha_ds = alpha_ds
         self.kind = kind
-        self.patterns_ds = Patterns(self.h, self.w)
-        self.colors_ds = Colors(intensity=0.75, noise=0.25)
+        self.colors_ds = Colors(intensity=0.75, noise=(0.25 if kind == 'train' else 0.0))
         self.n_iter = n_iter
         self.n_samples = n_samples if n_samples > 0 else len(self.alpha_ds)
         self.spurious_ratio = spurious_ratio
-        self.noise = noise
+        self.noise = noise if kind == 'train' else 0.0
         self.di = digit_intensity
         self.spurious_background = spurious_background
         self.spurious_class = spurious_class
         self.spurious_alpha = spurious_alpha
         self.pad = transforms.Pad((2, 2))
-        self.transform = transforms.Compose([
-            transforms.RandomRotation(15),
-        ])
+        self.rotate_bar = transforms.RandomRotation(90)
+        self.rotate_digit = transforms.RandomRotation(15)
         self.grid = [(0 , 0), (0 , 32), (0 , 64), 
                      (32, 0), (32, 32), (32, 64), 
                      (64, 0), (64, 32), (64, 64)]
+        self.bar = torch.zeros(1, 32, 32)
+        self.bar[:, 14:17, 6:26] = 1.0
 
     def chop_4(self, x):
         z = torch.zeros(4, 32, 32)
@@ -2077,6 +2077,12 @@ class Treisman(Dataset):
         z[1, 16:, :] = x[0, 16:, :]
         z[2, :, :16] = x[0, :, :16]
         z[3, :, 16:] = x[0, :, 16:]
+        return z
+
+    def rand_bars(self):
+        z = torch.zeros(8, 32, 32)
+        for i in range(8):
+            z[i] = self.rotate_bar(self.bar)[0]
         return z
 
     def place_in_grid(self, x):
@@ -2097,11 +2103,19 @@ class Treisman(Dataset):
             elif random.random() < self.spurious_ratio:
                 c, p = divmod(y, 3)
             else:
-                c = random.randint(0, self.colors_ds.n_colors-1)
-                p = random.randint(0, self.patterns_ds.n_patterns-1)
+                c = random.randint(0, 2)
+                p = random.randint(0, 2)
         else:
             c, p = divmod(self.spurious_background, 3)
-        return self.patterns_ds[p] * self.colors_ds[c]
+        if p == 0:
+            px = torch.randint(0, 2, (1, 4, 4)).float()
+            px = px.repeat(1, 2+self.h//4, 2+self.w//4)[:, :self.h, :self.w]
+        elif p == 1:
+            px = pink((self.h, self.w), c=2.7, a=0.7, actfun=torch.cos)
+            px = 0.5 + 0.5 * px
+        else:
+            px = 1.0 * (torch.rand(1, self.h, self.w) < 0.5)
+        return px * self.colors_ds[c]
 
     def __len__(self):
         return self.n_samples if self.kind == 'train' else len(self.alpha_ds)
@@ -2110,20 +2124,32 @@ class Treisman(Dataset):
         if self.kind == 'train':
             y = random.randint(0, self.alpha_ds.n_classes-1)
             x = self.alpha_ds.get_cls(y)
+            x = self.pad(x)
+            x = self.rotate_digit(x)
         else:
             y, i = divmod(idx, self.alpha_ds.n_samples)
             x = self.alpha_ds.get_instance(y, i)
-        if self.spurious_alpha:
-            not_x, not_y = self.alpha_ds.get_cls_not(y if self.spurious_class is None else self.spurious_class)
+            x = self.pad(x)
+
+        if self.spurious_alpha is None:
+            all_not_x, not_y = torch.zeros(8, 32, 32), None
+        elif self.spurious_alpha:
+            if self.spurious_class is None:
+                not_x, not_y = self.alpha_ds.get_cls_not(y)
+            else:
+                not_y = self.spurious_class
+                not_x = self.alpha_ds.get_cls(self.spurious_class)
+            not_x = self.pad(not_x)
+            all_not_x = torch.cat([self.chop_4(not_x), self.chop_2(not_x)], dim=0)
         else:
-            not_x, not_y = torch.zeros(1, 28, 28), None
-        x = self.pad(x)
-        not_x = self.pad(not_x)
-        chopped_not_x = torch.cat([self.chop_4(not_x), self.chop_2(not_x)], dim=0)
-        x_and_not_x = torch.cat([x, chopped_not_x], dim=0).unsqueeze(1)
+            all_not_x = self.rand_bars()
+
+        x = self.rotate_digit(x)
+        x_and_not_x = torch.cat([x, all_not_x], dim=0).unsqueeze(1)
         x_grid, m = self.place_in_grid(x_and_not_x)
         background = self.class_to_background(y)
         drgb = torch.rand(3, 1, 1)
+        drgb = drgb / drgb.max()
         
         composites = torch.zeros(self.n_iter, 3, self.h, self.w)
         components = 0
