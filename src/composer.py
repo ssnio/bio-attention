@@ -2136,3 +2136,26 @@ class Treisman(Dataset):
         masks[:] = m
         composites, masks = routine_02(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
+
+
+class Shapes:
+    def __init__(self, directory: str, h: int = None, w: int = None, p: int = None):
+        self.directory = directory
+        self.h, self.w, self.p = h, w, p
+        self.solid_shapes = load_shapes(directory, ["trg.png", "sqr.png", "circ.png"])
+        self.shape_outlines = load_shapes(directory, ["trg_.png", "sqr_.png", "circ_.png"])
+        self.n_shapes = len(self.solid_shapes) + len(self.shape_outlines)
+
+        if self.h is not None and self.w is not None:
+            self.resize = transforms.Resize((self.h, self.w), antialias=False)
+            self.solid_shapes = [self.resize(x) for x in self.solid_shapes]
+            self.shape_outlines = [self.resize(x) for x in self.shape_outlines]
+
+    def __len__(self):
+        return self.n_shapes
+
+    def __getitem__(self, i, solid: bool = True):
+        if solid:
+            return self.solid_shapes[i]
+        else:
+            return self.shape_outlines[i]
