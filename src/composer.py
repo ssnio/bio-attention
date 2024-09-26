@@ -2198,7 +2198,7 @@ class ShapeColorTexture(Dataset):
                  noise: float = 0.0,
                  spurious_ratio: float = 0.8,
                  outline_ratio: float = 0.1,
-                 spurious_background: bool = False,
+                 spurious_texture: bool = False,
                  spurious_color: bool = False,
                  ):
         super().__init__()
@@ -2215,7 +2215,7 @@ class ShapeColorTexture(Dataset):
         self.colors_ds = Colors(intensity=0.80, noise=(0.30 if kind == 'train' else 0.0))
         self.spurious_ratio = spurious_ratio
         self.outline_ratio = outline_ratio
-        self.spurious_background = spurious_background
+        self.spurious_texture = spurious_texture
         self.spurious_color = spurious_color
         self.transform = transforms.Compose([
             transforms.Pad(18),
@@ -2253,7 +2253,7 @@ class ShapeColorTexture(Dataset):
         s_i, c_i, t_i = torch.randint(0, 3, (3,))
         if self.spurious_color and random.random() < self.spurious_ratio:
             c_i = s_i
-        elif self.spurious_background and random.random() < self.spurious_ratio:
+        elif self.spurious_texture and random.random() < self.spurious_ratio:
             t_i = s_i
         return s_i, c_i, t_i
 
