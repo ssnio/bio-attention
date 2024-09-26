@@ -4,7 +4,7 @@ from typing import Callable
 import torch
 from torchvision.transforms.functional import normalize
 # # internal imports
-from .utils import obj_to_tuple
+from .utils import obj_to_tuple, get_dims
 
 
 def makenorm(kind: str, n_channels: int, trs: bool = False, aff: bool = True):
