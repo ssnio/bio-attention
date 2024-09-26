@@ -13,6 +13,15 @@ from torch.nn.functional import one_hot, conv2d
 from PIL import Image as PILImage
 
 
+def load_shapes(directory, shape_names):
+    raw_shapes = []
+    directory = os.path.join(directory, "shapes")
+    for file in shape_names:
+        x = 1.0 * (transforms.ToTensor()(PILImage.open(os.path.join(directory, file)))[0])
+        raw_shapes.append(x.unsqueeze(0))
+    return raw_shapes
+
+
 def do_n_it(x: Union[torch.Tensor, int], n: int):
     if isinstance(x, torch.Tensor):
         return x.unsqueeze(0).expand(n, -1, -1, -1)
