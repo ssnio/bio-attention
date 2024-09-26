@@ -259,3 +259,41 @@ class AttentionTrain:
         eval_scores_[4] = int(eval_scores_[4] / n_digits)
         return eval_scores_
 
+
+    def eval_seq(self, device, valid = True, do_tasks = None):
+        _loader = self.valid_loaders if valid else self.test_loaders
+        self.logger.info("validating..." if valid else "testing...")
+        
+        self.model.to(device)
+        self.model.eval()
+        with torch.no_grad():
+            for j, k in (enumerate(self.k_tasks) if do_tasks is None else do_tasks):
+                if k == "IOR":
+                    continue
+                else:
+                    has_prompt = self.tasks[k]["has_prompt"]
+                    task_id = self.tasks[k]["key"]
+                    class_weights = self.tasks[k].get("class_weights", None)
+                    class_weights = None if class_weights is None else class_weights.to(device)
+                    n = next(iter(_loader[j]))[0].size(1) + 2
+                    eval_scores = list([0.0, 0.0, 0.0, 0] for _ in range(n))
+                    for x, y, m, _, hy in _loader[j]:
+                        b_, n_ = x.size(0), x.size(1)
+                        x, y, m, hy = x.to(device), y.to(device), m.to(device), hy.to(device)
+                        self.model.initiate_forward(b_)
+                        for i in range(n):
+                            ni = i if i < n_ else -1
+                            p_m, p_y, a_ = self.model.one_forward(x[:, ni], task_id, hy[:, ni] if has_prompt else None)
+                            prediction = p_y.argmax(dim=1, keepdim=True)
+                            eval_scores[i][0] += cross_entropy(p_y, y[:, ni], class_weights, reduction='sum').item() if y.ndim > 1 else 0.0
+                            eval_scores[i][1] += pixel_error(p_m, m[:, ni]).item() * b_ if m.ndim > 1 else 0.0
+                            eval_scores[i][2] += normed_acc(p_m, m[:, ni]).item() * b_ if m.ndim > 1 else 0.0
+                            eval_scores[i][3] += prediction.eq(y[:, ni].view_as(prediction)).sum().item() if y.ndim > 1 else 0
+
+                    self.logger.info(f"  Task {k}:")
+                    n_samples = _loader[j].dataset.__len__()
+                    for i in range(n):
+                        self.logger.info(f"    CEi Loss: {eval_scores[i][0]:.6f}"
+                                         f"    Pix Err: {eval_scores[i][1]:.6f}"
+                                         f"    Att Acc: {eval_scores[i][2]:.6f}"
+                                         f"    Cls Acc: {eval_scores[i][3]}/{n_samples}")
