@@ -131,9 +131,9 @@ class AttentionTrain:
                 self.logger.info(f"    Loss {0}: {sum(self.loss_records[j][0][-self.n_batches:])/self.n_batches:.6f}"
                                     f"    Loss {1}: {sum(self.loss_records[j][1][-self.n_batches:])/self.n_batches:.6f}"
                                     f"    Loss {2}: {sum(self.loss_records[j][2][-self.n_batches:])/self.n_batches:.6f}")
-            if verbose:
+            if verbose or (epoch%16 == 0):
                 plot_all(10, self.model, self.tasks, self.results_folder, f"_ep_{epoch+1}", device, self.logger, False)
-                self.eval(device, track=True)
+            self.eval(device, track=True)
 
         self.undo_ior()
         self.model.eval()
