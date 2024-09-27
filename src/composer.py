@@ -2199,9 +2199,9 @@ class ShapeColorTexture(Dataset):
                  kind: str = 'train',
                  noise: float = 0.0,
                  spurious_ratio: float = 0.8,
+                 spurious_self: bool = False,
                  outline_ratio: float = 0.1,
-                 spurious_texture: bool = False,
-                 spurious_color: bool = False,
+                 ambiguous: bool = False,
                  ):
         super().__init__()
         self.directory = directory
@@ -2216,12 +2216,15 @@ class ShapeColorTexture(Dataset):
         self.shape_ds = Shapes(directory, h=60, w=60)
         self.colors_ds = Colors(intensity=0.80, noise=(0.30 if kind == 'train' else 0.0))
         self.spurious_ratio = spurious_ratio
+        self.spurious_self = spurious_self
         self.outline_ratio = outline_ratio
-        self.spurious_texture = spurious_texture
-        self.spurious_color = spurious_color
+        self.ambiguous = ambiguous
         self.transform = transforms.Compose([
             transforms.Pad(18),
-            transforms.RandomAffine(degrees=90, translate=(0.25, 0.25), scale=(0.7, 1.2)),
+            transforms.RandomAffine(degrees=90, translate=(0.25, 0.25), scale=(0.6, 1.1)),
+            transforms.RandomHorizontalFlip(p=0.5 if kind == 'train' else 0.0),
+            transforms.RandomVerticalFlip(p=0.5 if kind == 'train' else 0.0),
+            transforms.RandomPerspective(distortion_scale=0.2, p=0.5 if kind == 'train' else 0.0),
         ])
 
     def get_texture(self, i: int, h: int = None, w: int = None):
@@ -2252,18 +2255,17 @@ class ShapeColorTexture(Dataset):
         return so_
 
     def get_rand_i(self):
-        s_i, c_i, t_i = torch.randint(0, 3, (3,))
-        if self.spurious_color and random.random() < self.spurious_ratio:
-            c_i = s_i
-        elif self.spurious_texture and random.random() < self.spurious_ratio:
-            t_i = s_i
+        s_i, c_i, t_i = random.randint(0, 8), random.randint(0, 2), random.randint(0, 2)
+        if random.random() < self.spurious_ratio:
+            c_i, t_i = divmod(s_i, 3)
         return s_i, c_i, t_i
 
     def get_shape_outline(self, i):
-        s = self.shape_ds.__getitem__(i, solid=True)
         if random.random() < self.outline_ratio:
             o = self.shape_ds.__getitem__(i, solid=False)
+            s = self.shape_ds.__getitem__(i, solid=True) if self.spurious_self else torch.zeros_like(o)
         else:
+            s = self.shape_ds.__getitem__(i, solid=True)
             o = torch.zeros_like(s)
         so_ = torch.cat([s, o], dim=0)
         so_ = self.transform(so_)
@@ -2283,10 +2285,10 @@ class ShapeColorTexture(Dataset):
         labels = torch.zeros(self.n_iter).long()
         hot_labels = 0
 
-        background_color = self.colors_ds.__getitem__(c_i)
-        background_texture = self.get_texture(-1)
-        shape_color = torch.rand(3, 1, 1)
-        shape_texture = self.get_texture(t_i)
+        background_color = torch.rand(3, 1, 1) if self.spurious_self else self.colors_ds.__getitem__(c_i)
+        background_texture = self.get_texture(random.randint(0, 2) if self.ambiguous else -1) if self.spurious_self else self.get_texture(t_i)
+        shape_color = self.colors_ds.__getitem__(c_i) if self.spurious_self else torch.rand(3, 1, 1)
+        shape_texture = self.get_texture(t_i) if self.spurious_self else self.get_texture(random.randint(0, 2) if self.ambiguous else -1)
         shape, outline = self.get_shape_outline(s_i)
         b_ = background_color * background_texture
         s_ = shape_color * shape_texture * shape
