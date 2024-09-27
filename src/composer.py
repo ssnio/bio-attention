@@ -2168,8 +2168,10 @@ class Shapes:
     def __init__(self, directory: str, h: int = None, w: int = None, p: int = None):
         self.directory = directory
         self.h, self.w, self.p = h, w, p
-        self.solid_shapes = load_shapes(directory, ["trg.png", "sqr.png", "circ.png"])
-        self.shape_outlines = load_shapes(directory, ["trg_.png", "sqr_.png", "circ_.png"])
+        solids = ["trg.png", "sqr.png", "circ.png", "star.png", "hex.png", "heart.png", "david.png", "cros.png", "cres.png"]
+        outlines = ["trg_.png", "sqr_.png", "circ_.png", "star_.png", "hex_.png", "heart_.png", "david_.png", "cros_.png", "cres_.png"]
+        self.solid_shapes = load_shapes(directory, solids)
+        self.shape_outlines = load_shapes(directory, outlines)
         self.n_shapes = len(self.solid_shapes) + len(self.shape_outlines)
 
         if self.h is not None and self.w is not None:
