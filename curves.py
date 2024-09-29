@@ -190,6 +190,18 @@ def polar_plot(xt, xd, theta_res, results_folder, plotname):
     plt.savefig(os.path.join(results_folder, 'Tuning_Curve_' + plotname + '.svg'))
     plt.close()
 
+def plot_curves(n_layers, curve_tar_act, curve_dis_act, results_folder = None, plotname = None):
+    for j in range(n_layers):
+        plt.figure(figsize=(6, 4))
+        # mean = torch.cat([mean_tar_act[j][:2], mean_dis_act[j][:2]]).mean().cpu()
+        plt.plot(curve_tar_act[j].detach().cpu(), color="r")
+        plt.plot(curve_dis_act[j].detach().cpu(), color="b")
+        plt.title(f"Layer {j}")
+        if results_folder is None or plotname is None:
+            plt.show()
+        else:
+            plt.savefig(os.path.join(results_folder, f"{plotname}_{j}.svg"), format="svg")
+            plt.close()
 
 # start_folder = r"/Users/saeedida/GitProjects/attention/results/_roelf/new_era/1721344744__cuz"
 start_folder = r"/Users/saeedida/GitProjects/attention/results/_new_era/bio/curve/1726912036_sw_c"
@@ -276,6 +288,7 @@ roelfsema_.test_accuracy_curve(DeVice)
 
 
 batch_size = 256
+tasks["SwitchBox"]["datasets"][-1].training = False
 this_dl = DataLoader(tasks["SwitchBox"]["datasets"][-1], batch_size=batch_size, shuffle=False)
 
 target_composites, distractor_composites, masks, rec_fields, components = next(iter(this_dl))
@@ -311,57 +324,86 @@ n_iter = sum(fix_attend_saccade)
 n_layers = model.n_convs
 n_fix, n_att, n_sac = fix_attend_saccade
 n_fix_att = n_fix + n_att
-
 n_layers = model.n_convs
-n_iter = tasks["SwitchBox"]["param"][-1]
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+q = torch.linspace(0, 0.99, 100)
+for i in range(n_iter):
+    for j in range(n_layers):
+        tar_q = torch.quantile(targets_[i][j][receptive_[j] > 0.0].ravel(), q.to(DeVice))
+        dis_q = torch.quantile(distractors_[i][j][receptive_[j] > 0.0].ravel(), q.to(DeVice))
+        mean_tar_q = torch.quantile(targets_[i][j][receptive_[j] > 0.0].ravel(), 0.5).cpu()
+        mean_dis_q = torch.quantile(distractors_[i][j][receptive_[j] > 0.0].ravel(), 0.5).cpu()
+        plt.figure(figsize=(6, 4))
+        plt.title(f"Layer {j}, Iteration {i}, {mean_tar_q:.2f}, {mean_dis_q:.2f}")
+        plt.plot(tar_q.cpu(), 100.0*q, c="r")
+        plt.plot(dis_q.cpu(), 100.0*q, c="b")
+        plt.arrow(mean_tar_q, 50, 0.0, -45, color='r', head_width=0.05, head_length=5, alpha=1.0, width=0.01)
+        plt.arrow(mean_dis_q, 50, 0.0, -45, color='b', head_width=0.05, head_length=5, alpha=1.0, width=0.01)
+        plt.ylim(0, 100)
+        plt.xlim(0, max(tar_q.max().cpu().item(), mean_dis_q.max().cpu().item()))
+        plt.savefig(os.path.join(results_folder, f"Percentile_layer_{j}_iter_{i}.svg"), format="svg")
+        plt.close()
+        # plt.show()
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+q = torch.linspace(0, 1.0, 51)
+tar_m_ = [[] for _ in range(n_layers)]
+dis_m_ = [[] for _ in range(n_layers)]
+for j in range(n_layers):
+    for i in range(n_fix, n_fix_att):
+        if i == n_fix:
+            tar_m_[j] = targets_[i][j][receptive_[j] > 0.0].ravel()
+            dis_m_[j] = distractors_[i][j][receptive_[j] > 0.0].ravel()
+        else:
+            tar_m_[j] = torch.cat((tar_m_[j], targets_[i][j][receptive_[j] > 0.0].ravel()), dim=0)
+            dis_m_[j] = torch.cat((dis_m_[j], distractors_[i][j][receptive_[j] > 0.0].ravel()), dim=0)
+
+
+for j in range(n_layers):
+    tar_q = torch.quantile(tar_m_[j], q.to(DeVice))
+    dis_q = torch.quantile(dis_m_[j], q.to(DeVice))
+    mean_tar_q = torch.quantile(tar_m_[j], 0.5).cpu()
+    mean_dis_q = torch.quantile(dis_m_[j], 0.5).cpu()
+    plt.figure(figsize=(6, 4))
+    plt.title(f"Layer {j}, Iteration {n_fix}-{n_fix_att}, {mean_tar_q:.2f}, {mean_dis_q:.2f}")
+    plt.plot(tar_q.cpu(), 100.0*q, c="r")
+    plt.plot(dis_q.cpu(), 100.0*q, c="b")
+    plt.arrow(mean_tar_q, 50, 0.0, -45, color='r', head_width=0.05, head_length=5, alpha=1.0, width=0.01)
+    plt.arrow(mean_dis_q, 50, 0.0, -45, color='b', head_width=0.05, head_length=5, alpha=1.0, width=0.01)
+    plt.ylim(0, 100)
+    plt.xlim(-max(tar_q.max().cpu().item(), mean_dis_q.max().cpu().item())/5, max(tar_q.max().cpu().item(), mean_dis_q.max().cpu().item()))
+    plt.savefig(os.path.join(results_folder, f"Percentile_layer_{j}.svg"), format="svg")
+    plt.close()
+    # plt.show()
+
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 curve_tar_act = [[] for _ in range(model.n_convs)]
 curve_dis_act = [[] for _ in range(model.n_convs)]
-
 for j in range(n_layers):
     for i in range(n_iter):
         curve_tar_act[j].append(targets_[i][j][receptive_[j] > 0.0].mean().clone())
         curve_dis_act[j].append(distractors_[i][j][receptive_[j] > 0.0].mean().clone())
 curve_tar_act = torch.tensor(curve_tar_act)
 curve_dis_act = torch.tensor(curve_dis_act)
+plot_curves(n_layers, curve_tar_act, curve_dis_act, results_folder, "Curve_layer")
 
-for j in range(n_layers):
-    plt.figure(figsize=(6, 4))
-    # mean = torch.cat([mean_tar_act[j][:2], mean_dis_act[j][:2]]).mean().cpu()
-    plt.plot(curve_tar_act[j].detach().cpu(), color="r")
-    plt.plot(curve_dis_act[j].detach().cpu(), color="b")
-    plt.title(f"Layer {j}")
-    plt.savefig(os.path.join(results_folder, f"Curve_layer_{j}.svg"), format="svg")
-    plt.close()
-    # plt.show()
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 curve_tar_act = [[] for _ in range(model.n_convs)]
 curve_dis_act = [[] for _ in range(model.n_convs)]
-
 for j in range(n_layers):
     for i in range(n_iter):
         curve_tar_act[j].append((targets_[i][j] - both_[j])[receptive_[j] > 0.0].mean().clone())
         curve_dis_act[j].append((distractors_[i][j] - both_[j])[receptive_[j] > 0.0].mean().clone())
 curve_tar_act = torch.tensor(curve_tar_act)
 curve_dis_act = torch.tensor(curve_dis_act)
-
-for j in range(n_layers):
-    plt.figure(figsize=(6, 4))
-    # mean = torch.cat([mean_tar_act[j][:2], mean_dis_act[j][:2]]).mean().cpu()
-    plt.plot(curve_tar_act[j].detach().cpu(), color="r")
-    plt.plot(curve_dis_act[j].detach().cpu(), color="b")
-    plt.title(f"Layer {j}")
-    plt.savefig(os.path.join(results_folder, f"CurveDeBoth_layer_{j}.svg"), format="svg")
-    plt.close()
-    # plt.show()
-
+plot_curves(n_layers, curve_tar_act, curve_dis_act, results_folder, "CurveDeBoth_layer")
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 curve_tar_act = [[] for _ in range(model.n_convs)]
 curve_dis_act = [[] for _ in range(model.n_convs)]
-
 for j in range(n_layers):
     for i in range(n_iter):
         curve_tar_act[j].append((targets_[i][j] - both_[j])[receptive_[j] > 0.0].mean().clone())
@@ -370,39 +412,19 @@ curve_tar_act = torch.tensor(curve_tar_act)
 curve_dis_act = torch.tensor(curve_dis_act)
 curve_tar_act = curve_tar_act - curve_tar_act[:, :2].mean(dim=1, keepdim=True)
 curve_dis_act = curve_dis_act - curve_dis_act[:, :2].mean(dim=1, keepdim=True)
-
-for j in range(n_layers):
-    plt.figure(figsize=(6, 4))
-    # mean = torch.cat([mean_tar_act[j][:2], mean_dis_act[j][:2]]).mean().cpu()
-    plt.plot(curve_tar_act[j].detach().cpu(), color="r")
-    plt.plot(curve_dis_act[j].detach().cpu(), color="b")
-    plt.title(f"Layer {j}")
-    plt.savefig(os.path.join(results_folder, f"CurveDeBothDe_layer_{j}.svg"), format="svg")
-    plt.close()
-    # plt.show()
+plot_curves(n_layers, curve_tar_act, curve_dis_act, results_folder, "CurveDeBothDe_layer")
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 curve_tar_act = [[] for _ in range(model.n_convs)]
 curve_dis_act = [[] for _ in range(model.n_convs)]
-
 for j in range(n_layers):
     for i in range(n_iter):
         curve_tar_act[j].append((targets_[i][j] - both_[j])[receptive_[j] > 0.0].mean().clone())
         curve_dis_act[j].append((distractors_[i][j] - both_[j])[receptive_[j] > 0.0].mean().clone())
 curve_tar_act = torch.tensor(curve_tar_act)
 curve_dis_act = torch.tensor(curve_dis_act)
-
 curve_tar_act = curve_tar_act - curve_tar_act[:, :2].mean(dim=1, keepdim=True)
 curve_dis_act = curve_dis_act - curve_dis_act[:, :2].mean(dim=1, keepdim=True)
 curve_tar_act = curve_tar_act / curve_tar_act.max(dim=1, keepdim=True).values
 curve_dis_act = curve_dis_act / curve_tar_act.max(dim=1, keepdim=True).values
-
-for j in range(n_layers):
-    plt.figure(figsize=(6, 4))
-    # mean = torch.cat([mean_tar_act[j][:2], mean_dis_act[j][:2]]).mean().cpu()
-    plt.plot(curve_tar_act[j].detach().cpu(), color="r")
-    plt.plot(curve_dis_act[j].detach().cpu(), color="b")
-    plt.title(f"Layer {j}")
-    plt.savefig(os.path.join(results_folder, f"CurveDeBothDeNorm_layer_{j}.svg"), format="svg")
-    plt.close()
-    # plt.show()
+plot_curves(n_layers, curve_tar_act, curve_dis_act, results_folder, "CurveDeBothDeNorm_layer")
