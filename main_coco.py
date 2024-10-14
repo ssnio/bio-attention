@@ -4,7 +4,7 @@ import argparse
 from pprint import pformat
 from collections import OrderedDict
 from src.composer import COCOTokens, COCOAnimals, BG20k
-from src.composer import ConceptualGrouping_COCO, Recognition_COCO, Search_COCO, SearchGrid_COCO
+from src.composer import PerceptualGrouping_COCO, Recognition_COCO, Search_COCO, SearchGrid_COCO
 from src.conductor import AttentionTrain
 from src.model import AttentionModel
 from src.utils import plot_all, plot_loss_all
@@ -40,7 +40,7 @@ model_params = {
     "softness": [0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0],  # softness of the attention (scale)
     "channels": (3, 32, 32, 64, 64, 128, 128, 256, 256),  # channels in the encoder
     "residuals": False,  # use residuals in the encoder
-    "kernels": (7, 3, 3, 3, 3, 3, 3, 3, 3, 3),  # kernel size
+    "kernels": (7, 3, 3, 3, 3, 3, 3, 3),  # kernel size
     "strides": 1,  # stride
     "paddings": "same",  # padding
     "conv_bias": True,  # bias in the convolutions
@@ -60,11 +60,11 @@ model_params = {
     "task_bias": True,  # use tasks embeddings for the decoder channels  (additive)
     "task_funs": torch.nn.Tanh(),  # activation function for the tasks embeddings
     "rnn_to_fc": False,  # use FC instead of RNN
-    "rnn_cat": False,
+    'trans_fun': torch.nn.Identity(),  # activation function between Convolutional(.T) and RNN/Linear layers
 }
 
 tasks = OrderedDict({})
-tasks["ObjPerm"] = {
+tasks["Recognition"] = {
     "composer": Recognition_COCO,
     "key": 0,
     "params": {"n_iter": 3, "stride": 64, "blank": False, "static": False, "noise": 0.25},
@@ -77,8 +77,8 @@ tasks["ObjPerm"] = {
     "has_prompt": False,
     "random": None,
 }
-tasks["SpatialPrime"] = {
-    "composer": ConceptualGrouping_COCO,
+tasks["PerceptualGrouping"] = {
+    "composer": PerceptualGrouping_COCO,
     "key": 1,
     "params": {"fix_attend": (2, 3), "noise": 0.25},
     "datasets": [],
@@ -90,7 +90,7 @@ tasks["SpatialPrime"] = {
     "has_prompt": False,
     "random": None,
 }
-tasks["SearchV4"] = {
+tasks["Search"] = {
     "composer": Search_COCO,
     "key": 2,
     "params": {"n_iter": 3, "noise": 0.25},
@@ -102,7 +102,7 @@ tasks["SearchV4"] = {
     "has_prompt": True,
     "random": None,
 }
-tasks["SearchV5"] = {
+tasks["SearchGrid"] = {
     "composer": SearchGrid_COCO,
     "key": 2,
     "params": {"n_iter": 3, "noise": 0.25},
@@ -142,8 +142,8 @@ for o in tasks:
     tasks[o]["datasets"][2].build_valid_test()
     tasks[o]["dataloaders"] = build_loaders(tasks[o]["datasets"], batch_size=train_params["batch_size"], num_workers=num_workers, pin_memory=pin_memory, shuffle=False)
 assert model_params["n_classes"] == train_coco.n_classes, f"Number of n_classes {model_params['n_classes']} and n_classes {train_coco.n_classes} must be equal!"
-tasks["SpatialPrime"]["class_weights"] = train_coco.class_weights if hasattr(train_coco, "class_weights") else None
-tasks["ObjPerm"]["class_weights"] = train_coco.class_weights if hasattr(train_coco, "class_weights") else None
+tasks["PerceptualGrouping"]["class_weights"] = train_coco.class_weights if hasattr(train_coco, "class_weights") else None
+tasks["Recognition"]["class_weights"] = train_coco.class_weights if hasattr(train_coco, "class_weights") else None
 
 # model and optimizer...
 model = AttentionModel(**model_params)
@@ -151,7 +151,7 @@ model = AttentionModel(**model_params)
 (argus.verbose == 1) and logger.info(f"Model has {get_n_parameters(model):,} parameters!")
 optimizer = torch.optim.Adam(model.parameters(), lr=train_params["lr"], weight_decay=train_params["l2"])
 scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=train_params["milestones"], gamma=train_params["gamma"])
-conductor = AttentionTrain(model, optimizer, scheduler, tasks, logger, results_folder)
+conductor = AttentionTrain(model, optimizer, scheduler, tasks, logger, results_folder, train_params["max_grad_norm"], True)
 
 # training...
 plot_all(10, model, tasks, results_folder, "_pre", DeVice, logger, (argus.verbose == 1))
@@ -172,7 +172,7 @@ for i, task in enumerate(tasks):
     save_results_to_csv(conductor.loss_records[i], 
                         os.path.join(results_folder, f"loss_{task}.csv"),
                         ["labels", "masks", "last_label"], logger)
-    save_results_to_csv(conductor.eval_records[i], 
+    save_results_to_csv(conductor.valid_records[i], 
                         os.path.join(results_folder, f"eval_{task}.csv"),
                         ["CEi", "CEe", "PixErr", "AttAcc", "ClsAcc"], logger)
 (argus.verbose == 1) and logger.info("Done!")
