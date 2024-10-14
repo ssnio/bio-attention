@@ -30,7 +30,7 @@ parser.add_argument('-l2', type=float, default=1e-6)
 parser.add_argument('-exase', type=str, default="default")
 parser.add_argument('-verbose', type=int, default=1)
 argus = parser.parse_args()
-data_path = r"../attention/data"
+data_path = r"./data"
 train_params = {
     "n_epochs": argus.n_epochs,
     "batch_size": argus.batch_size,
