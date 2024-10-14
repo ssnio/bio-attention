@@ -739,7 +739,7 @@ class CelebACrop(Dataset):
         super().__init__()
         self.dataset = dataset
         self.n_iter = n_iter
-        self.hair_dir = hair_dir if hair_dir is not None else r"./data/celeba/"
+        self.hair_dir = hair_dir if hair_dir is not None else r"./data"
         self.in_dims = in_dims
         _, self.h, self.w = self.in_dims
         self.padding = padding
@@ -759,9 +759,9 @@ class CelebACrop(Dataset):
             ])
 
     def get_hair(self):
-        if self.hair_dir and os.path.exists(os.path.join(self.hair_dir, f"{self.kind}_hair_ids.pt")):
+        if self.hair_dir and os.path.exists(os.path.join(self.hair_dir, f"celeba/{self.kind}_hair_ids.pt")):
             print(f'Loading {self.kind}_hair_ids.pt from file!')
-            return torch.load(os.path.join(self.hair_dir, f"{self.kind}_hair_ids.pt"))
+            return torch.load(os.path.join(self.hair_dir, f"celeba/{self.kind}_hair_ids.pt"))
         else:
             print(f'Creating {self.kind}_hair_ids.pt file!')
             hair_ids = [[], [], [], [], []]  # [all, fblonde, fblack, mblonde, mblack]
@@ -776,7 +776,7 @@ class CelebACrop(Dataset):
             random.shuffle(hair_ids[0])  # shuffle the training set only # # # # 
         for i, n in enumerate(self.which_names):
             print(f"{n}: {len(hair_ids[i])}")
-        torch.save(hair_ids, os.path.join(self.hair_dir, f"{self.kind}_hair_ids.pt"))
+        torch.save(hair_ids, os.path.join(self.hair_dir, f"celeba/{self.kind}_hair_ids.pt"))
         print(f'{self.kind}_hair_ids.pt saved to file!')
         return hair_ids
 
