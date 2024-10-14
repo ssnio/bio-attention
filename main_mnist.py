@@ -40,19 +40,20 @@ train_params = {
     "dir": r"./results",
     "milestones": [32, 64],
     "gamma": 0.2,
+    "max_grad_norm": 10.0,
 }
 
 model_params = {
     "in_dims": (3, 96, 96),  # input dimensions (channels, height, width)
     "n_classes": 10,  # number of classes
-    "out_dim": 10,  # output dimensions (could be larger than n_classes)
-    "normalize": False,  # normalize input images
+    "out_dim": 20,  # output dimensions (could be larger than n_classes)
+    "normalize": True,  # normalize input images
     "softness": 0.5,  # softness of the attention (scale)
     "channels": (3, 16, 32, 64, 128, 128),  # channels in the encoder
     "residuals": False,  # use residuals in the encoder
     "kernels": 3,  # kernel size
     "strides": 1,  # stride
-    "paddings": "same",  # padding
+    "paddings": 1,  # padding
     "conv_bias": True,  # bias in the convolutions
     "conv_norms": (None, *("layer" for _ in range(4))),  # normalization in the encoder
     "conv_dropouts": 0.0,  # dropout in the encoder
@@ -71,14 +72,13 @@ model_params = {
     'norm_mean': [0.5, 0.5, 0.5],  # mean for the normalization
     'norm_std': [1.0, 1.0, 1.0],  # std for the normalization
     "rnn_to_fc": False,  # Whether to use the RNN layers or FC
-    "rnn_cat": True, # whether to concatenate the forward and backward RNN outputs
-    "use_bridges": False,  # whether to use a fancy bridge between the encoder and decoder
+    'trans_fun': torch.nn.ReLU(),  # activation function between Convolutional(.T) and RNN/Linear layers
 }
 
 # # tasks include the composer, key, params, datasets, dataloaders, loss weights, loss slices, and has prompt
-# # Loss weights are for the Cross-Entropy (CE), MSE for attention, and CE for the last label
+# # Loss weights are for the Cross-Entropy (CE), MSE for attention, and CE for the last label prediction
 # # the first CE loss is for the iterations indicated in the loss slices
-# # the second CE loss is for the last label (after applying the last attention map)
+# # the second CE loss is for the last prediction (after applying the last attention map)
 # # Loss slices determine which iterations are used for the loss
 tasks = OrderedDict({})
 tasks["IOR"] = {
@@ -87,7 +87,7 @@ tasks["IOR"] = {
     "params": {"n_digits": 3, "n_attend": 2, "noise": 0.25, "overlap": 1.0},
     "datasets": [],
     "dataloaders": [],
-    "loss_w": (1.0, 1.0, 0.0),  # Loss weights (Cross-Entropy (CE), MSE for attention, CE last label)
+    "loss_w": (1.0, 1.0, 0.0),  # Loss weights (Cross-Entropy (CE), MSE for attention, CE last prediction)
     "loss_s": (None, None),  # Loss slices (CE, MSE for attention)
     "has_prompt": False,  # has prompt or not (only used for top-down Search)
 }
@@ -179,7 +179,7 @@ model = AttentionModel(**model_params)
 (argus.verbose == 1) and logger.info(f"Model has {get_n_parameters(model):,} parameters!")
 optimizer = torch.optim.Adam(model.parameters(), lr=train_params["lr"], weight_decay=train_params["l2"])
 scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=train_params["milestones"], gamma=train_params["gamma"])
-conductor = AttentionTrain(model, optimizer, scheduler, tasks, logger, results_folder)
+conductor = AttentionTrain(model, optimizer, scheduler, tasks, logger, results_folder, train_params["max_grad_norm"], False)
 
 # training...
 plot_all(10, model, tasks, results_folder, "_pre", DeVice, logger, (argus.verbose == 1))
@@ -200,7 +200,7 @@ for i, task in enumerate(tasks):
     save_results_to_csv(conductor.loss_records[i], 
                         os.path.join(results_folder, f"loss_{task}.csv"),
                         ["labels", "masks", "last_label"], logger)
-    save_results_to_csv(conductor.eval_records[i], 
-                        os.path.join(results_folder, f"eval_{task}.csv"),
+    save_results_to_csv(conductor.valid_records[i], 
+                        os.path.join(results_folder, f"valid_{task}.csv"),
                         ["CEi", "CEe", "PixErr", "AttAcc", "ClsAcc"], logger)
 (argus.verbose == 1) and logger.info("Done!")
