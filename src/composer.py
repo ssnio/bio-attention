@@ -13,15 +13,6 @@ from torch.nn.functional import one_hot, conv2d
 from PIL import Image as PILImage
 
 
-def load_shapes(directory, shape_names):
-    raw_shapes = []
-    directory = os.path.join(directory, "shapes")
-    for file in shape_names:
-        x = 1.0 * (transforms.ToTensor()(PILImage.open(os.path.join(directory, file)))[0])
-        raw_shapes.append(x.unsqueeze(0))
-    return raw_shapes
-
-
 def do_n_it(x: Union[torch.Tensor, int], n: int):
     if isinstance(x, torch.Tensor):
         return x.unsqueeze(0).expand(n, -1, -1, -1)
@@ -754,16 +745,17 @@ class CelebACrop(Dataset):
         self.padding = padding
         self.noise = noise if kind == "train" else 0.0
         self.kind = kind  # train, valid, test
-        self.which = which  # 0: all, 1: fblonde, 2: fbrunette, 3: mblonde, 4: mbrunette
-        self.which_names = ["all", "fblonde", "fbrunette", "mblonde", "mbrunette"]
+        self.which = which  # 0: all, 1: fblonde, 2: fblack, 3: mblonde, 4: mblack
+        self.which_names = ["all", "fblonde", "fblack", "mblonde", "mblack"]
         self.len_which = len(self.which_names)
         assert self.which in range(self.len_which), f"which must be between 0 and {self.len_which-1} but got {self.which}!"
         self.at_list = ['Male', 'Black_Hair', 'Blond_Hair']
-        self.gender_i, self.brunette_i, self.blonde_i =(self.dataset.attr_names.index(x) for x in self.at_list)
+        self.gender_i, self.black_i, self.blonde_i =(self.dataset.attr_names.index(x) for x in self.at_list)
         self.hair_ids = self.get_hair()
         self.transform = transforms.Compose([
             transforms.Resize((self.h - 2*self.padding, self.w - 2*self.padding), antialias=True),
-            transforms.RandomHorizontalFlip(),
+            transforms.RandomHorizontalFlip(p=0.5 if kind == "train" else 0.0),
+            # transforms.RandomVerticalFlip(p=0.5 if kind == "train" else 0.0),
             ])
 
     def get_hair(self):
@@ -772,13 +764,13 @@ class CelebACrop(Dataset):
             return torch.load(os.path.join(self.hair_dir, f"{self.kind}_hair_ids.pt"))
         else:
             print(f'Creating {self.kind}_hair_ids.pt file!')
-            hair_ids = [[], [], [], [], []]  # [all, fblonde, fbrunette, mblonde, mbrunette]
+            hair_ids = [[], [], [], [], []]  # [all, fblonde, fblack, mblonde, mblack]
             for i, (_, y) in enumerate(self.dataset):
-                if y[self.blonde_i] == 1 or y[self.brunette_i] == 1:
+                if y[self.blonde_i] == 1 or y[self.black_i] == 1:
                     hair_ids[0].append(i)
                     if self.kind == "train" and y[self.gender_i] == 1:  # since the dataset is not balanced
                         hair_ids[0].append(i)
-                    g, b = y[self.gender_i], y[self.brunette_i]
+                    g, b = y[self.gender_i], y[self.black_i]
                     hair_ids[1+b+2*g].append(i)
         if self.kind == "train":
             random.shuffle(hair_ids[0])  # shuffle the training set only # # # # 
@@ -1092,7 +1084,7 @@ class BG20k(Dataset):
         return x
     
 
-class ConceptualGrouping_COCO(Dataset):
+class PerceptualGrouping_COCO(Dataset):
     def __init__(self,
                  coco_dataset: COCOAnimals,
                  fix_attend: tuple,
@@ -1528,7 +1520,7 @@ class Recognition_COCO(Dataset):
             composites[:] = x
         else:
             if self.static:
-                composites[:] = background[:, :, :self.w] * (1.0 - m) + x
+                composites[:] = background[:, :self.h, :self.w] * (1.0 - m) + x
             else:
                 d = random.randint(0, 1)
                 for i in range(self.n_iter):
@@ -1705,7 +1697,7 @@ class CelebGlasses(Dataset):
         return do_n_it(x, self.n_iter), do_n_it(y.item(), self.n_iter), 0, 0, 0
     
 
-class SwitchBox(Dataset):
+class CurveTracing(Dataset):
     def __init__(self,
                  n_samples: int,
                  fix_attend_saccade: tuple,
@@ -1814,7 +1806,7 @@ class SwitchBox(Dataset):
         components[5] = distractor[distractor_saccade]
 
         if self.training:
-            return target_composites, 0, masks, 0, 0  # do_n_it(y.item(), self.n_iter)
+            return target_composites, 0, masks, components, 0 
         else:
             return target_composites, distractor_composites, masks, rec_fields, components
 
@@ -1905,395 +1897,3 @@ class ArrowCur_DS(Dataset):
 
         return composites, labels, masks, components, hot_labels
 
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-def routine_02(composites: torch.Tensor, masks: torch.Tensor, noise: float = 0.0):
-    # adding noise and clamping 
-    composites += torch.rand(1) * noise * (torch.rand_like(composites) - 0.5)
-    composites = torch.clamp(composites, 0.0, 1.0)
-    masks = torch.clamp(masks, 0.0, 1.0)
-    masks = 2.0 * (masks - 0.5)
-    return composites, masks
-
-
-def read_ATFMNIST_csv(directory: str, labels: list, save: bool = False):
-    "Only for the AlphabetTypeFaceMNIST csv file!!!!"
-    data = [[] for _ in labels]
-    name = "".join(['D', 'G', 'O', 'Q', 'P', 'R', 'B', 'A', 'S'])
-    with open(directory, newline='') as f:
-        reader = csv.reader(f)
-        data_list = list(reader)
-    for x in data_list[1:]:  # skip the header
-        if str(x[1]) in labels:
-            i = labels.index(str(x[1]))
-            data[i].append([torch.tensor([float(v) for v in x[2:]]).reshape(28, 28).numpy() / 255.0])
-    data = torch.tensor(data)
-
-    r = [random.sample(list(range(2874)), 2874) for x in range(9)]
-    test_data = data[0:1, r[0][:200], :, :]
-    for i in range(1, 9):
-        test_data = torch.cat((test_data, data[i:i+1, r[i][:200], :, :]), dim=0)
-
-    valid_data = data[0:1, r[0][200:400], :, :]
-    for i in range(1, 9):
-        valid_data = torch.cat((valid_data, data[i:i+1, r[i][200:400], :, :]), dim=0)
-
-    train_data = data[0:1, r[0][400:], :, :]
-    for i in range(1, 9):
-        train_data = torch.cat((train_data, data[i:i+1, r[i][400:], :, :]), dim=0)
-    if save:
-        torch.save(data, directory.replace('.csv', '_'+name+'.pt'))
-        torch.save(test_data, directory.replace('.csv', '_'+name+'_test.pt'))
-        torch.save(valid_data, directory.replace('.csv', '_'+name+'_valid.pt'))
-        torch.save(train_data, directory.replace('.csv', '_'+name+'_train.pt'))
-
-    return data, test_data, valid_data, train_data
-
-
-class Patterns:
-    def __init__(self, h: int, w: int):
-        self.h, self.w = h, w
-        self.patterns = []
-        self.patterns.append(self.pattex())
-        self.patterns.append(self.p_salt_pepper())
-        self.patterns.append(self.p_pink().unsqueeze(0))
-        self.n_patterns = len(self.patterns)
-
-    def pattex(self):
-        p = torch.randint(0, 2, (1, 4, 4)).float()
-        p = p.repeat(1, 2+self.h//4, 2+self.w//4)[:, :self.h, :self.w]
-        return p
-
-    def p_pink(self):
-        x = pink((self.h, self.w), c=2.7, a=0.7, actfun=torch.cos)
-        x = 0.5 + 0.5 * x
-        return x
-
-    def p_salt_pepper(self, p=0.5):
-        return 1.0 * (torch.rand(1, self.h, self.w) < p)
-
-    def __len__(self):
-        return self.n_patterns
-
-    def __getitem__(self, i):
-        return self.patterns[i]
-
-
-class Colors:
-    def __init__(self, intensity: float = 0.75, noise: float = 0.0):
-        self.ci = intensity  # color intensity
-        self.noise = noise
-        self.colors = []
-        self.colors.append(torch.tensor([self.ci, 0.0, 0.0]).view(3, 1, 1))  # red
-        self.colors.append(torch.tensor([0.0, self.ci, 0.0]).view(3, 1, 1))  # green
-        self.colors.append(torch.tensor([0.0, 0.0, self.ci]).view(3, 1, 1))  # blue
-        self.n_colors = len(self.colors)
-
-    def __len__(self):
-        return self.n_colors
-
-    def __getitem__(self, i):
-        c = self.colors[i] + self.noise * (torch.rand(3, 1, 1) - 0.5)
-        c = torch.clamp(c, 0.0, 1.0)
-        return c
-
-
-class Alphabets:
-    def __init__(self, directory: str, kind: str = 'train'):
-        self.labels = ['D', 'G', 'O', 'Q', 'P', 'R', 'B', 'A', 'S']
-        self.alpha = "".join(self.labels)
-        self.kind = kind
-        self.directory = os.path.join(directory, f'treisman_alpha/AlphabetTypeFaceMNIST_{self.alpha}_{self.kind}.pt')
-        assert os.path.exists(self.directory)
-        self.data = torch.load(self.directory)
-        self.n_classes, self.n_samples = self.data.shape[:2]
-
-    def get_cls(self, y: int):
-        i = random.randint(0, self.n_samples-1)
-        return self.data[y][i]
-
-    def get_cls_not(self, y: int):
-        all_except_y = list(j for j in range(self.n_classes) if j != y)
-        not_y = random.choice(all_except_y)
-        i = random.randint(0, self.n_samples-1)
-        return self.data[not_y][i], not_y
-
-    def get_instance(self, y: int, i: int):
-        return self.data[y][i]
-    
-    def __len__(self):
-        return self.n_classes * self.n_samples
-
-
-class Treisman(Dataset):
-    def __init__(self, 
-                 alpha_ds: Alphabets,
-                 in_dims: tuple,
-                 n_iter: int, 
-                 n_samples: int,
-                 kind: str = 'train',
-                 spurious_ratio: float = 0.9,
-                 digit_intensity: float = 0.75,
-                 noise: float = 0.0,
-                 spurious_background: int = None,
-                 spurious_class: int = None,
-                 spurious_alpha: bool = False,
-                 ):
-        super().__init__()
-        assert alpha_ds.kind == kind
-        self.in_dims = in_dims
-        self.c, self.h, self.w = self.in_dims
-        self.alpha_ds = alpha_ds
-        self.kind = kind
-        self.colors_ds = Colors(intensity=0.75, noise=(0.25 if kind == 'train' else 0.0))
-        self.n_iter = n_iter
-        self.n_samples = n_samples if n_samples > 0 else len(self.alpha_ds)
-        self.spurious_ratio = spurious_ratio
-        self.noise = noise if kind == 'train' else 0.0
-        self.di = digit_intensity
-        self.spurious_background = spurious_background
-        self.spurious_class = spurious_class
-        self.spurious_alpha = spurious_alpha
-        self.pad = transforms.Pad((2, 2))
-        self.rotate_bar = transforms.RandomRotation(90)
-        self.rotate_digit = transforms.RandomRotation(15)
-        self.grid = [(0 , 0), (0 , 32), (0 , 64), 
-                     (32, 0), (32, 32), (32, 64), 
-                     (64, 0), (64, 32), (64, 64)]
-        self.bar = torch.zeros(1, 32, 32)
-        self.bar[:, 14:17, 6:26] = 1.0
-
-    def chop_4(self, x):
-        z = torch.zeros(4, 32, 32)
-        z[0, :16, :16] = x[0, :16, :16]
-        z[1, :16, 16:] = x[0, :16, 16:]
-        z[2, 16:, :16] = x[0, 16:, :16]
-        z[3, 16:, 16:] = x[0, 16:, 16:]
-        return z
-    
-    def chop_2(self, x):
-        z = torch.zeros(4, 32, 32)
-        z[0, :16, :] = x[0, :16, :]
-        z[1, 16:, :] = x[0, 16:, :]
-        z[2, :, :16] = x[0, :, :16]
-        z[3, :, 16:] = x[0, :, 16:]
-        return z
-
-    def rand_bars(self):
-        z = torch.zeros(8, 32, 32)
-        for i in range(8):
-            z[i] = self.rotate_bar(self.bar)[0]
-        return z
-
-    def place_in_grid(self, x):
-        assert x.shape == (9, 1, 32, 32)
-        z = torch.zeros(1, 96, 96)
-        m = torch.zeros(1, 96, 96)
-        r = random.sample(range(9), 9)
-        for i, j in enumerate(r):
-            z[0, self.grid[i][0]:self.grid[i][0]+32, self.grid[i][1]:self.grid[i][1]+32] = x[j]
-            if j == 0:
-                m[0, self.grid[i][0]:self.grid[i][0]+32, self.grid[i][1]:self.grid[i][1]+32] = x[j]
-        return z, m
-
-    def class_to_background(self, y):
-        if self.spurious_background is None:
-            if self.spurious_ratio < 0.0:
-                return torch.zeros(3, self.h, self.w)
-            elif random.random() < self.spurious_ratio:
-                c, p = divmod(y, 3)
-            else:
-                c = random.randint(0, 2)
-                p = random.randint(0, 2)
-        else:
-            c, p = divmod(self.spurious_background, 3)
-        if p == 0:
-            px = torch.randint(0, 2, (1, 4, 4)).float()
-            px = px.repeat(1, 2+self.h//4, 2+self.w//4)[:, :self.h, :self.w]
-        elif p == 1:
-            px = pink((self.h, self.w), c=2.7, a=0.7, actfun=torch.cos)
-            px = 0.5 + 0.5 * px
-        else:
-            px = 1.0 * (torch.rand(1, self.h, self.w) < 0.5)
-        return px * self.colors_ds[c]
-
-    def __len__(self):
-        return self.n_samples if self.kind == 'train' else len(self.alpha_ds)
-    
-    def __getitem__(self, idx):
-        if self.kind == 'train':
-            y = random.randint(0, self.alpha_ds.n_classes-1)
-            x = self.alpha_ds.get_cls(y)
-            x = self.pad(x)
-            x = self.rotate_digit(x)
-        else:
-            y, i = divmod(idx, self.alpha_ds.n_samples)
-            x = self.alpha_ds.get_instance(y, i)
-            x = self.pad(x)
-
-        if self.spurious_alpha is None:
-            all_not_x, not_y = torch.zeros(8, 32, 32), None
-        elif self.spurious_alpha:
-            if self.spurious_class is None:
-                not_x, not_y = self.alpha_ds.get_cls_not(y)
-            else:
-                not_y = self.spurious_class
-                not_x = self.alpha_ds.get_cls(self.spurious_class)
-            not_x = self.pad(not_x)
-            all_not_x = torch.cat([self.chop_4(not_x), self.chop_2(not_x)], dim=0)
-        else:
-            all_not_x = self.rand_bars()
-
-        x = self.rotate_digit(x)
-        x_and_not_x = torch.cat([x, all_not_x], dim=0).unsqueeze(1)
-        x_grid, m = self.place_in_grid(x_and_not_x)
-        background = self.class_to_background(y)
-        drgb = torch.rand(3, 1, 1)
-        drgb = drgb / drgb.max()
-        
-        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
-        components = 0
-        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
-        labels = torch.zeros(self.n_iter).long()
-        hot_labels = 0
-
-        composites[:] = (x_grid * drgb * self.di) + (1.0 - x_grid) * background
-        labels[:] = y
-        masks[:] = m
-        composites, masks = routine_02(composites, masks, self.noise)
-        return composites, labels, masks, components, hot_labels
-
-
-class Shapes:
-    def __init__(self, directory: str, h: int = None, w: int = None, p: int = None):
-        self.directory = directory
-        self.h, self.w, self.p = h, w, p
-        solids = ["trg.png", "sqr.png", "circ.png", "star.png", "hex.png", "heart.png", "david.png", "cros.png", "cres.png"]
-        outlines = ["trg_.png", "sqr_.png", "circ_.png", "star_.png", "hex_.png", "heart_.png", "david_.png", "cros_.png", "cres_.png"]
-        self.solid_shapes = load_shapes(directory, solids)
-        self.shape_outlines = load_shapes(directory, outlines)
-        self.n_shapes = len(self.solid_shapes) + len(self.shape_outlines)
-
-        if self.h is not None and self.w is not None:
-            self.resize = transforms.Resize((self.h, self.w), antialias=False)
-            self.solid_shapes = [self.resize(x) for x in self.solid_shapes]
-            self.shape_outlines = [self.resize(x) for x in self.shape_outlines]
-
-    def __len__(self):
-        return self.n_shapes
-
-    def __getitem__(self, i, solid: bool = True):
-        if solid:
-            return self.solid_shapes[i]
-        else:
-            return self.shape_outlines[i]
-    
-
-class ShapeColorTexture(Dataset):
-    def __init__(self, 
-                 directory: str,
-                 in_dims: tuple,
-                 n_iter: int, 
-                 n_samples: int,
-                 task: int,
-                 kind: str = 'train',
-                 noise: float = 0.0,
-                 spurious_ratio: float = 0.8,
-                 spurious_self: bool = False,
-                 outline_ratio: float = 0.1,
-                 ambiguous: bool = False,
-                 ):
-        super().__init__()
-        self.directory = directory
-        assert os.path.exists(directory), f"Directory {directory} does not exist!"
-        self.in_dims = in_dims
-        self.c, self.h, self.w = self.in_dims
-        self.n_iter = n_iter
-        self.n_samples = n_samples
-        self.task = task
-        self.kind = kind
-        self.noise = noise if kind == 'train' else 0.0
-        self.shape_ds = Shapes(directory, h=60, w=60)
-        self.colors_ds = Colors(intensity=0.80, noise=(0.30 if kind == 'train' else 0.0))
-        self.spurious_ratio = spurious_ratio
-        self.spurious_self = spurious_self
-        self.outline_ratio = outline_ratio
-        self.ambiguous = ambiguous
-        self.transform = transforms.Compose([
-            transforms.Pad(18),
-            transforms.RandomAffine(degrees=90, translate=(0.25, 0.25), scale=(0.6, 1.1)),
-            transforms.RandomHorizontalFlip(p=0.5 if kind == 'train' else 0.0),
-            transforms.RandomVerticalFlip(p=0.5 if kind == 'train' else 0.0),
-            transforms.RandomPerspective(distortion_scale=0.2, p=0.5 if kind == 'train' else 0.0),
-        ])
-
-    def get_texture(self, i: int, h: int = None, w: int = None):
-        h = self.h if h is None else h
-        w = self.w if w is None else w
-        if i == 0:  # repetative pattern
-            px = torch.randint(0, 2, (1, 4, 4)).float()
-            px = px.repeat(1, 2+h//4, 2+w//4)[:, :h, :w]
-        elif i == 1:  # correlated noise
-            px = pink((h, w), c=2.7, a=0.7, actfun=torch.cos)
-            px = 0.5 + 0.5 * px
-        elif i == 2:  # random salt and pepper noise
-            px = 1.0 * (torch.rand(1, h, w) < 0.5)
-        else:  # solid color
-            px = torch.ones(1, h, w)
-        return px
-
-    def get_solid(self, i: int):
-        s = self.shape_ds.__getitem__(i, solid=True)
-        s = self.transform(s)
-        return s
-
-    def get_outline(self, i: int):
-        s = self.shape_ds.__getitem__(i, solid=True)
-        o = self.shape_ds.__getitem__(i, solid=False)
-        so_ = torch.cat([s, o], dim=0)
-        so_ = self.transform(so_)
-        return so_
-
-    def get_rand_i(self):
-        s_i, c_i, t_i = random.randint(0, 8), random.randint(0, 2), random.randint(0, 2)
-        if random.random() < self.spurious_ratio:
-            c_i, t_i = divmod(s_i, 3)
-        return s_i, c_i, t_i
-
-    def get_shape_outline(self, i):
-        if random.random() < self.outline_ratio:
-            o = self.shape_ds.__getitem__(i, solid=False)
-            s = self.shape_ds.__getitem__(i, solid=True) if self.spurious_self else torch.zeros_like(o)
-        else:
-            s = self.shape_ds.__getitem__(i, solid=True)
-            o = torch.zeros_like(s)
-        so_ = torch.cat([s, o], dim=0)
-        so_ = self.transform(so_)
-        s, o = so_[:1], so_[1:]
-        return s, o
-
-    def __len__(self):
-        return self.n_samples
-    
-    def __getitem__(self, idx):
-        s_i, c_i, t_i = self.get_rand_i()
-        y = [s_i, c_i, t_i][self.task]
-        
-        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
-        components = 0
-        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
-        labels = torch.zeros(self.n_iter).long()
-        hot_labels = 0
-
-        background_color = torch.rand(3, 1, 1) if self.spurious_self else self.colors_ds.__getitem__(c_i)
-        background_texture = self.get_texture(random.randint(0, 2) if self.ambiguous else -1) if self.spurious_self else self.get_texture(t_i)
-        shape_color = self.colors_ds.__getitem__(c_i) if self.spurious_self else torch.rand(3, 1, 1)
-        shape_texture = self.get_texture(t_i) if self.spurious_self else self.get_texture(random.randint(0, 2) if self.ambiguous else -1)
-        shape, outline = self.get_shape_outline(s_i)
-        b_ = background_color * background_texture
-        s_ = shape_color * shape_texture * shape
-        masks[:] = shape
-        labels[:] = y
-        composites[:] = s_ + (1 - shape) * b_ + outline
-        composites, masks = routine_02(composites, masks, self.noise)
-        return composites, labels, masks, components, hot_labels
