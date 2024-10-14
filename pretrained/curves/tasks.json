@@ -1,0 +1,1 @@
+{"CurveTracing": {"composer": "SwitchBox", "key": 0, "params": {"fix_attend_saccade": [2, 3, 2], "ydim": 96, "xdim": 96, "padding": 16, "resolution": 100, "noise": 0.25}, "datasets": ["CurveTracing", "CurveTracing", "CurveTracing"], "dataloaders": [null, null, null], "loss_w": [0.0, 1.0, 0.0], "loss_s": [null, [1, 4, 6]], "has_prompt": false}}

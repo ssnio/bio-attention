@@ -1,0 +1,1 @@
+{"n_epochs": 42, "batch_size": 128, "lr": 0.0005, "l2": 1e-05, "exase": "default", "dir": "./results", "milestones": [24, 32], "gamma": 0.2, "max_grad_norm": 10.0}

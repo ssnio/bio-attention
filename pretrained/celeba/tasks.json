@@ -1,0 +1,1 @@
+{"Celeb": {"composer": "CelebACrop", "key": 0, "params": {"n_iter": 2, "hair_dir": null, "in_dims": [3, 128, 128], "padding": 0, "noise": 0.25, "which": 0}, "datasets": ["CelebACrop", "CelebACrop", "CelebACrop"], "dataloaders": [null, null, null], "loss_w": [0.0, 0.0, 1.0], "loss_s": [0, null], "has_prompt": false}}
