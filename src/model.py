@@ -82,13 +82,14 @@ class ConvBlock(torch.nn.Module):
                  pool = None,
                  residual = False,
                  last = False,
+                 affine = True,
                  ):
         super().__init__()
         self.residual = residual
         assert not residual or in_channels == out_channels, "Residual connection requires in_channels == out_channels"
-        assert padding == 'same' or not self.residual, "Padding 'same' is only supported for non-residual connections"
+        # assert padding == 'same' or not self.residual, "Padding 'same' is only supported for non-residual connections"
         self.conv = torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias, padding_mode='reflect')
-        self.norm = makenorm(norm, out_channels, False)
+        self.norm = makenorm(norm, out_channels, False, affine)
         self.dropout = torch.nn.Dropout2d(dropout) if dropout > 0.0 else None
         self.fun = fun
         if pool is not None:
@@ -121,13 +122,14 @@ class DeConvBlock(torch.nn.Module):
                  norm = None,
                  dropout = 0.0,
                  fun = torch.nn.Tanh(),
+                 affine = True,
                  ):
         super().__init__()
 
         padding = 1 if padding in ('same', 1) else 0
         self.upsample = torch.nn.Upsample(size=upsample)
         self.deconv = torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding=padding, bias=bias)
-        self.norm = makenorm(norm, out_channels, False)
+        self.norm = makenorm(norm, out_channels, False, affine)
         self.dropout = torch.nn.Dropout2d(dropout) if dropout > 0.0 else None
         self.fun = fun
     
@@ -171,9 +173,8 @@ class AttentionModel(torch.nn.Module):
                  task_bias: bool = True,  # whether to bias the deconvolutional layers with task embedding
                  task_funs: Callable = None,  # activation function for task embedding
                  rnn_to_fc: bool = False,  # whether to use RNN layers or MLP layers
-                 rnn_cat: bool = False,  # whether to concatenate the forward and backward RNN outputs
-                 use_bridges: bool = False,  # whether to use a fancy bridge between the encoder and decoder
                  trans_fun: Callable = torch.nn.Identity(),  # the activation function between convolutional and RNN layers
+                 affine: bool = True,  # whether to use affine transformation in normalization layers
                  ):
         super().__init__()
         self.normalize = normalize
@@ -190,6 +191,10 @@ class AttentionModel(torch.nn.Module):
         self.softness = obj_to_tuple(softness, self.n_convs)
         self.kernels = obj_to_tuple(kernels, self.n_convs)
         self.strides = obj_to_tuple(strides, self.n_convs)
+        if isinstance(paddings, int):
+            paddings = paddings
+        elif paddings == 'same':
+            paddings = list((1 if k == 3 else 2 if k == 5 else 3) for k in self.kernels)
         self.paddings = obj_to_tuple(paddings, self.n_convs)
         self.conv_bias = obj_to_tuple(conv_bias, self.n_convs)
         self.conv_norms = obj_to_tuple(conv_norms, self.n_convs)
@@ -213,11 +218,9 @@ class AttentionModel(torch.nn.Module):
         self.task_funs = task_funs if self.n_tasks > 1 else None
         self.conv_dims = [self.in_dims]
         self.rnn_to_fc = rnn_to_fc
-        self.rnn_cat = rnn_cat
-        self.use_bridges = use_bridges
         self.bridge_norm = "layer"
         self.trans_fun = trans_fun
-        assert use_bridges is False or isinstance(conv_funs, torch.nn.Tanh)
+        self.affine = affine
         self.conv_blocks = torch.nn.ModuleList()
         self.frnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
         self.brnn_blocks = torch.nn.ModuleList() if self.n_rnns > 0 else None
@@ -237,7 +240,8 @@ class AttentionModel(torch.nn.Module):
                                               self.conv_funs[i], 
                                               self.pools[i], 
                                               self.residuals[i],
-                                              False if i < self.n_convs - 1 else True
+                                              False if i < self.n_convs - 1 else True,
+                                              affine=self.affine
                                               ))
             c, (h, w) = self.channels[i+1], get_dims(self.conv_dims[-1], self.conv_blocks[-1].conv)
             h, w = h // self.pools[i], w // self.pools[i]
@@ -266,11 +270,11 @@ class AttentionModel(torch.nn.Module):
         for i in range(1, self.n_rnns + 1):
             if self.rnn_to_fc:
                 self.brnn_blocks.append(torch.nn.Sequential(
-                    torch.nn.Linear(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), self.rnn_dims[-i-1], bias=self.rnn_bias[-i]),
+                    torch.nn.Linear(self.rnn_dims[-i], self.rnn_dims[-i-1], bias=self.rnn_bias[-i]),
                     torch.nn.Dropout(self.rnn_dropouts[-i]) if self.rnn_dropouts[-i] > 0.0 else torch.nn.Identity(),
                     self.rnn_funs[-i]))
             else:
-                self.brnn_blocks.append(MonoSeqRNN(self.rnn_dims[-i] * (2 if self.rnn_cat else 1), 
+                self.brnn_blocks.append(MonoSeqRNN(self.rnn_dims[-i], 
                                                     self.rnn_dims[-i-1], 
                                                     self.rnn_bias[-i], 
                                                     self.rnn_dropouts[-i], 
@@ -291,22 +295,28 @@ class AttentionModel(torch.nn.Module):
             self.deconv_blocks.append(DeConvBlock(self.conv_dims[-i-1][-2:],
                                                   2 * self.channels[-i], 
                                                   self.channels[-i-1] if i < self.n_convs else 1,
-                                                  self.kernels[-i],
+                                                  3,
                                                   self.strides[-i],
                                                   'same',
                                                   self.conv_bias[-i],
                                                   self.deconv_norms[-i],
                                                   self.conv_dropouts[-i],
                                                   self.deconv_funs[-i] if i < self.n_convs else torch.nn.Tanh(), 
+                                                  affine=self.affine
                                                   ))
-            if self.use_bridges and i < self.n_convs:
-                    self.bridges.append(torch.nn.Sequential(makenorm(self.bridge_norm, self.channels[-i-1]), torch.nn.Tanh()))
-            else:
-                self.bridges.append(torch.nn.Identity())
 
         # pre-allocation
         self.masks = {}
+        self.gates = {}
         self.hstates = {}
+
+    def re_init(self, init_way, gain: float):
+        with torch.no_grad():
+            for p in self.parameters():
+                if p.ndim > 1:
+                    init_way(p, gain=gain)
+                else:
+                    torch.nn.init.zeros_(p)
 
     def soft_attention(self, x: torch.Tensor, i: int):
         m = self.masks[f"mask_{i}"]
@@ -316,6 +326,8 @@ class AttentionModel(torch.nn.Module):
         device = next(self.parameters()).device
         for i in range(self.n_convs):
             self.masks[f"mask_{i}"] = torch.zeros(batch_size, *self.conv_dims[i]).to(device)
+        for i in range(self.n_rnns):
+            self.gates[f"gates_{i}"] = torch.zeros(batch_size, self.rnn_dims[i+1]).to(device)
         for i in range(self.n_rnns):
             self.hstates[f"f_state{i}"] = torch.zeros(batch_size, self.rnn_dims[i+1]).to(device)
             self.hstates[f"b_state{i}"] = torch.zeros(batch_size, self.rnn_dims[-i-2]).to(device)
@@ -381,7 +393,6 @@ class AttentionModel(torch.nn.Module):
             # backward recurrent layers
             h = self.fc_in(h)
             for i in range(self.n_rnns):
-                h = torch.cat([h, act_[-i-1][r]], dim=1) if self.rnn_cat else h
                 h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
                 self.hstates[f"b_state{i}"] = h
             
@@ -397,7 +408,7 @@ class AttentionModel(torch.nn.Module):
                     b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                     h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
                 h = self.deconv_blocks[i](h)
-                self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h)
+                self.masks[f"mask_{self.n_convs - i - 1}"] = h
             masks_[r] = self.masks["mask_0"]
 
         # post-processing
@@ -487,7 +498,6 @@ class AttentionModel(torch.nn.Module):
         # backward recurrent layers
         h = self.fc_in(h)
         for i in range(self.n_rnns):
-            h = torch.cat([h, act_[-i-1]], dim=1) if self.rnn_cat else h
             h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
             self.hstates[f"b_state{i}"] = h
         
@@ -504,7 +514,29 @@ class AttentionModel(torch.nn.Module):
                 b = self.embed_blocks_b[i](t).unsqueeze(-1).unsqueeze(-1) if self.task_bias else 0.0
                 h = a * h + b if self.task_funs is None else self.task_funs(a * h + b)
             h = self.deconv_blocks[i](h)
-            self.masks[f"mask_{self.n_convs - i - 1}"] = self.bridges[i](h)
+            self.masks[f"mask_{self.n_convs - i - 1}"] = h
         masks_ = self.masks["mask_0"]
         
         return masks_, labels_, act_
+
+
+    def simp_forward(self, x: torch.Tensor):
+        h = normalize(x, self.norm_mean, self.norm_std) if self.normalize else x
+        # convolutional layers
+        for i in range(self.n_convs):
+            h = self.conv_blocks[i](h)
+        
+        # forward conv-rnn connection linear layer
+        h = h.flatten(start_dim=1)
+        h = self.conv_frnn(h)
+
+        # forward recurrent layers
+        for i in range(self.n_rnns):
+            h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+            self.hstates[f"f_state{i}"] = h
+
+        # output
+        h = self.fc_out(h)
+        labels_ = h[:, :self.n_classes]
+        
+        return labels_
