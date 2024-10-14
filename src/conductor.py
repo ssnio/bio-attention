@@ -59,7 +59,8 @@ class AttentionTrain:
         self.test_loaders = [tasks[k]["dataloaders"][2] for k in self.k_tasks]
         
         self.loss_records = list([[], [], []] for _ in range(self.n_k_tasks))
-        self.eval_records = list([[], [], [], [], []] for _ in range(self.n_k_tasks))
+        self.valid_records = list([[], [], [], [], []] for _ in range(self.n_k_tasks))
+        self.train_records = list([[], [], [], [], []] for _ in range(self.n_k_tasks))
 
         self.grad_records = []
         self.max_grad_norm = max_grad_norm
@@ -96,7 +97,7 @@ class AttentionTrain:
                         loss_3 = cross_entropy(p_yy, y[:, -1], class_weights) if y.ndim > 1 else torch.tensor([0.0]).to(device)
 
                     # mask loss (minimize the area of attention)
-                    loss = (mask_mp * ((p_m[:, -1] + 1.0)/2.0).mean()) if mask_mp > 0.0 else 0.0
+                    loss = (mask_mp * (((p_m[:, -1] + 1.0)/2.0).mean())) if mask_mp > 0.0 else 0.0
                     
                     # cross-entropy for the sequence
                     loss = loss + loss_w[0] * loss_1 if loss_w[0] > 0 else loss
@@ -131,7 +132,7 @@ class AttentionTrain:
                 self.logger.info(f"    Loss {0}: {sum(self.loss_records[j][0][-self.n_batches:])/self.n_batches:.6f}"
                                     f"    Loss {1}: {sum(self.loss_records[j][1][-self.n_batches:])/self.n_batches:.6f}"
                                     f"    Loss {2}: {sum(self.loss_records[j][2][-self.n_batches:])/self.n_batches:.6f}")
-            if verbose or (epoch%16 == 0):
+            if verbose or (epoch+1 in list(range(0, n_epochs+1, 4)) or epoch==0):
                 plot_all(10, self.model, self.tasks, self.results_folder, f"_ep_{epoch+1}", device, self.logger, False)
             self.eval(device, track=True)
 
@@ -186,9 +187,19 @@ class AttentionTrain:
             loss_2 = loss_2 + mse_loss(p_m[:, j], targets_masks[i])
         return loss_1, loss_2, loss_3
 
-    def eval(self, device, valid = True, track = False):
-        _loader = self.valid_loaders if valid else self.test_loaders
-        self.logger.info("validating..." if valid else "testing...")
+    def eval(self, device, kind = "valid", track = False):
+        if kind == "train":
+            if hasattr(self, "train_loaders"):
+                _loader = self.train_loaders
+                self.logger.info("train-eval...")
+            else:
+                return
+        elif kind == "test":
+            _loader = self.test_loaders
+            self.logger.info("testing...")
+        else :
+            _loader = self.valid_loaders
+            self.logger.info("validating...")
         eval_scores = list([0.0, 0.0, 0.0, 0.0, 0] for _ in range(self.n_k_tasks))
         
         self.model.to(device)
@@ -225,12 +236,19 @@ class AttentionTrain:
                                  f"    Pix Err: {eval_scores[j][2]:.6f}"
                                  f"    Att Acc: {eval_scores[j][3]:.6f}"
                                  f"    Cls Acc: {eval_scores[j][4]}/{n_samples}")
-                if track:
-                    self.eval_records[j][0].append(eval_scores[j][0])
-                    self.eval_records[j][1].append(eval_scores[j][1])
-                    self.eval_records[j][2].append(eval_scores[j][2])
-                    self.eval_records[j][3].append(eval_scores[j][3])
-                    self.eval_records[j][4].append(eval_scores[j][4]/n_samples)
+                if track and kind == "valid":
+                    self.valid_records[j][0].append(eval_scores[j][0])
+                    self.valid_records[j][1].append(eval_scores[j][1])
+                    self.valid_records[j][2].append(eval_scores[j][2])
+                    self.valid_records[j][3].append(eval_scores[j][3])
+                    self.valid_records[j][4].append(eval_scores[j][4]/n_samples)
+                elif track and kind == "train":
+                    self.train_records[j][0].append(eval_scores[j][0])
+                    self.train_records[j][1].append(eval_scores[j][1])
+                    self.train_records[j][2].append(eval_scores[j][2])
+                    self.train_records[j][3].append(eval_scores[j][3])
+                    self.train_records[j][4].append(eval_scores[j][4]/n_samples)
+        
         
     def eval_ior(self, dloader_, device_):
         eval_scores_ = [0.0, 0.0, 0.0, 0.0, 0]
@@ -260,9 +278,17 @@ class AttentionTrain:
         return eval_scores_
 
 
-    def eval_seq(self, device, valid = True, do_tasks = None):
-        _loader = self.valid_loaders if valid else self.test_loaders
-        self.logger.info("validating..." if valid else "testing...")
+    def eval_seq(self, device, kind, do_tasks = None):
+
+        if kind == "train":
+            _loader = self.train_loaders
+            self.logger.info("train-eval...")
+        elif kind == "test":
+            _loader = self.test_loaders
+            self.logger.info("testing...")
+        else :
+            _loader = self.valid_loaders
+            self.logger.info("validating...")
         
         self.model.to(device)
         self.model.eval()
@@ -271,11 +297,11 @@ class AttentionTrain:
                 if k == "IOR":
                     continue
                 else:
-                    has_prompt = self.tasks[k]["has_prompt"]
+                    has_prompt = self.tasks[k].get("has_prompt", False)
                     task_id = self.tasks[k]["key"]
                     class_weights = self.tasks[k].get("class_weights", None)
                     class_weights = None if class_weights is None else class_weights.to(device)
-                    n = next(iter(_loader[j]))[0].size(1) + 2
+                    n = next(iter(_loader[j]))[0].size(1) + 1
                     eval_scores = list([0.0, 0.0, 0.0, 0] for _ in range(n))
                     for x, y, m, _, hy in _loader[j]:
                         b_, n_ = x.size(0), x.size(1)
@@ -293,7 +319,85 @@ class AttentionTrain:
                     self.logger.info(f"  Task {k}:")
                     n_samples = _loader[j].dataset.__len__()
                     for i in range(n):
-                        self.logger.info(f"    CEi Loss: {eval_scores[i][0]:.6f}"
-                                         f"    Pix Err: {eval_scores[i][1]:.6f}"
-                                         f"    Att Acc: {eval_scores[i][2]:.6f}"
+                        self.logger.info(f"    CEi Loss: {eval_scores[i][0]/n_samples:.6f}"
+                                         f"    Pix Err: {eval_scores[i][1]/n_samples:.6f}"
+                                         f"    Att Acc: {eval_scores[i][2]/n_samples:.6f}"
                                          f"    Cls Acc: {eval_scores[i][3]}/{n_samples}")
+
+
+def cls_train_for(
+    model: AttentionModel, 
+    tasks: dict,
+    optimizer: torch.optim.Adam, 
+    scheduler: torch.optim.lr_scheduler.LRScheduler, 
+    n_epochs: int,
+    device: torch.device,
+    logger: Logger,
+    max_grad_norm: float = 10.0,
+):
+    loss_log = []
+    model.to(device)
+    model.train()
+    task_content = next(iter(tasks.values()))
+    train_dl, _, _ = task_content["dataloaders"]
+    n_bs = len(train_dl)
+
+    for epoch in range(n_epochs):
+        epoch_t = time.time()
+        for x, y, *_ in train_dl:
+            x = x if x.ndim == 4 else x[:, -1].contiguous()
+            y = y if y.ndim == 1 else y[:, -1].contiguous()
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            # model.initiate_forward(x.size(0))
+            p_y = model.simp_forward(x)
+            loss = cross_entropy(p_y, y)
+            loss.backward()
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            loss_log.append(loss.item())
+        if scheduler is not None:
+            scheduler.step()
+
+        logger.info(f"Epoch {epoch} in {time.time()-epoch_t:.2f} sec")
+        logger.info(f"\t CE-Loss: {sum(loss_log[-n_bs:])/n_bs:.4f}")
+        cls_eval_for(model, tasks, device, logger)
+        model.train()
+    
+    model.eval()
+    return loss_log
+
+
+def cls_eval_for(
+    model: AttentionModel, 
+    tasks: dict,
+    device: torch.device,
+    logger: Logger,
+    valid: bool = True,
+):
+    
+    ce_loss = 0.0
+    accuracy = 0
+
+    model.to(device)
+    model.train()
+    task_content = next(iter(tasks.values()))
+    _, valid_dl, test_dl = task_content["dataloaders"]
+    this_dl = valid_dl if valid else test_dl
+    n_bs = len(this_dl.dataset)
+    logger.info("Validating..." if valid else "Testing...")
+
+    model.to(device)
+    model.eval()
+    with torch.no_grad():
+        for x, y, _, _, _ in this_dl:
+            x = x if x.ndim == 4 else x[:, -1].contiguous()
+            y = y if y.ndim == 1 else y[:, -1].contiguous()
+            x, y = x.to(device), y.to(device)
+            # model.initiate_forward(x.size(0))
+            p_y = model.simp_forward(x)
+            ce_loss += cross_entropy(p_y, y, reduction='sum').item()
+            accuracy += (p_y.argmax(dim=1) == y).sum().item()
+    
+    logger.info(f"\t CE-Loss: {ce_loss/n_bs:.4f}")
+    logger.info(f"\t Acc: {accuracy/n_bs:.4f}")
