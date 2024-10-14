@@ -92,6 +92,8 @@ def load_dicts(dir, name):
             dicts[k] = torch.nn.Tanh()
         elif v == 'GELU()' or v == "GELU(approximate='none')":
             dicts[k] = torch.nn.GELU()
+        elif v == 'Identity()':
+            dicts[k] = torch.nn.Identity()
         elif v == "(GELU(approximate='none'), ReLU())":
             dicts[k] = (torch.nn.GELU(approximate='none'), torch.nn.ReLU())
     return dicts
