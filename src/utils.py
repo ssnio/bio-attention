@@ -39,7 +39,10 @@ def plot_one(n, model_, dataloader_, key_, has_prompt_, directory, logger, prefi
     for j in range(n):
         for i in range(n_iter):
             plt.subplot(n_iter, 3 * n, 1 + i * 3 * n + j * 3)
-            plt.imshow(composites[j, i].permute(1, 2, 0))
+            if composites.size(2) == 1:
+                plt.imshow(composites[j, i, 0], cmap="gray")
+            else:
+                plt.imshow(composites[j, i].permute(1, 2, 0))
             plt.axis("off")
         for i in range(n_iter):
             plt.subplot(n_iter, 3 * n, 2 + i * 3 * n + j * 3)
@@ -85,6 +88,29 @@ def plot_loss(loss_records, directory, prefix: str = None, suffix: str = None):
             raise ValueError(f"Unknown type {type(loss_records[i][0])}!")
         plt.yscale("log")
         plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{directory}/{prefix}{suffix}.svg", format="svg")
+    plt.close()
+
+
+def plot_loss_simp(loss_records, directory, prefix: str = None, suffix: str = None):
+    prefix = prefix if prefix is not None else ""
+    suffix = suffix if suffix is not None else ""
+    n_ = 1 if isinstance(loss_records[0], (int, float)) else len(loss_records)
+    plt.figure(figsize=(9, 3*n_))
+    for i in range(n_):
+        plt.subplot(n_, 1, i + 1)
+        if isinstance(loss_records[i], (int, float)):
+            plt.plot(loss_records)
+        elif isinstance(loss_records[i][0], (int, float)):
+            plt.plot(loss_records[i])
+        elif isinstance(loss_records[i][0], (list, tuple)):
+            for j in range(len(loss_records[i])):
+                plt.plot(loss_records[i][j])
+        else:
+            raise ValueError(f"Unknown type {type(loss_records[i][0])}!")
+        plt.yscale("log")
+        # plt.legend()
     plt.tight_layout()
     plt.savefig(f"{directory}/{prefix}{suffix}.svg", format="svg")
     plt.close()
