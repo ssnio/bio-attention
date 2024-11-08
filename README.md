@@ -5,13 +5,15 @@ This is the code code repository for the paper [Modeling Attention and Binding i
 ![Demo](https://raw.githubusercontent.com/ssnio/bio-attention/refs/heads/main/demo/demo.gif)
 
 ## Demo
-To run the interactive demo, you only need install the required packages (see [Requirements](#requirements)). The demo uses a pre-trained model [pretrained/coco](./pretrained/coco) and sample images in [demo](./demo/) directory:
+The demo uses a pre-trained model [pretrained/coco](./pretrained/coco) and sample images in [demo](./demo/) directory. To run the interactive demo, you first need to install the required packages (see [Requirements](#requirements)) and then to execute following commands:
 
 ```
 git clone https://github.com/ssnio/bio-attention.git
 cd bio-attention
 python3 demo_coco.py
 ```
+
+You can include more samples for the interactive demo by following this instructions [demo-readme](demo/README.md).
 
 ## repository structure
 `prelude.py`: Auxiliary functions for setting up the experiments and book-keeping.  
