@@ -51,6 +51,7 @@ We used Python 3.9 and the following packages for our training and analysis:
 - Pillow (9.3)
 - torchvision (0.14.0+cu116)
 - matplotlib (3.6)
+
 *Note 0:* Other than Python and packages listed above, our code itself does not require any explicit setup or install. Although it is important to download the relevant datasets to [data](./data/) directory for the respective experiment.
 *Note 1:* We used NVIDIA A100 for training the models, and hence PyTorch with Cuda is listed above. For using the notebooks or the demo, the code should run without any problem on CPU or Apple-silicon.  
 *Note 2:* For the COCO experiment, the COCO python tools (pycocotools) should be installed inside the src folder (see [COCO-API](https://github.com/cocodataset/cocoapi)).
