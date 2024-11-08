@@ -19,4 +19,4 @@ All the datasets are publicly available in their corresponding repositories:
 **CelebA**: [https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html)  
 **FashionMNIST**: [https://github.com/zalandoresearch/fashion-mnist](https://github.com/zalandoresearch/fashion-mnist)  
 
-The codes for composing different stimuli and the curve images is included in the [./src/composer.py](./src/composer.py)
+The codes for composing different input-images as well as the curve-tracing stimuli is included in the [./src/composer.py](./src/composer.py)
