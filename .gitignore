@@ -1,4 +1,5 @@
 # Added to template
+src/pycocotools/
 workshop.py
 results/*
 logs/*
@@ -12,7 +13,6 @@ logs/*
 data/MNIST
 data/celeba
 data/coco
-
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
