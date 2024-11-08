@@ -30,3 +30,10 @@ All the datasets are publicly available in their corresponding repositories:
 **FashionMNIST**: [https://github.com/zalandoresearch/fashion-mnist](https://github.com/zalandoresearch/fashion-mnist)  
 
 The codes for composing different input-images as well as the curve-tracing stimuli is included in the [./src/composer.py](./src/composer.py)
+
+## Required packages
+- torch (PyTorch)
+- numpy
+- Pillow
+- torchvision
+- matplotlib
