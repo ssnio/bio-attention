@@ -1,1 +1,1 @@
-These are few modified (cropped or composed into a grid) samples from the COCO test dataset. To include more samples, you should make sure to add "_s" suffix if it is a single image, and "_g" suffix if it is composition of 4 images into one image.
+These are few modified (cropped or composed into a grid) samples from the MS COCO test dataset. To include more samples, you should make sure to add "_s" suffix if it is a single image, and "_g" suffix if it is composition of 4 images into one image.
