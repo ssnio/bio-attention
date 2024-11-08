@@ -10,3 +10,13 @@ Pre-trained models with the parameters used to train them are in the pretrained 
 
 ### COCO experiment
 For the COCO experiment, the COCO python tools (pycocotools) should be installed inside the src folder (see [COCO-API](https://github.com/cocodataset/cocoapi)).
+
+## Datasets
+All the datasets are publicly available in their corresponding repositories:
+**MNIST**: [https://yann.lecun.com/exdb/mnist/](https://yann.lecun.com/exdb/mnist/)
+**COCO**: [https://cocodataset.org](https://cocodataset.org)
+**BG-20k**: [https://github.com/JizhiziLi/GFM](https://github.com/JizhiziLi/GFM)
+**CelebA**: [https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html)
+**FashionMNIST**: [https://github.com/zalandoresearch/fashion-mnist](https://github.com/zalandoresearch/fashion-mnist)
+
+The codes for composing different stimuli and the curve images is included in the [./src/composer.py](./src/composer.py)
