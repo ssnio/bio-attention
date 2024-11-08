@@ -4,6 +4,15 @@ This is the code code repository for the paper [Modeling Attention and Binding i
 
 ![Demo](https://raw.githubusercontent.com/ssnio/bio-attention/refs/heads/main/demo/demo.gif)
 
+## Demo
+To run the interactive demo, you only need install the required packages (see [Requirements](#requirements)). The demo uses a pre-trained model [pretrained/coco](./pretrained/coco) and sample images in [demo](./demo/) directory:
+
+```
+git clone https://github.com/ssnio/bio-attention.git
+cd bio-attention
+python3 demo_coco.py
+```
+
 ## repository structure
 `prelude.py`: Auxiliary functions for setting up the experiments and book-keeping.  
 `demo_coco.py`: uses the pre-trained COCO model and the images in the demo folder to demonstrate the multi-task paradigm and it does not require installing COCO-API. It is possible to include new images in the demo directory, but their names must have suffix "_s" for single or "_g" for grid.  
@@ -33,15 +42,15 @@ All the datasets are publicly available in their corresponding repositories:
 **CelebA**: [https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html)  
 **FashionMNIST**: [https://github.com/zalandoresearch/fashion-mnist](https://github.com/zalandoresearch/fashion-mnist)  
 
-The codes for composing different input-images as well as the curve-tracing stimuli is included in the [./src/composer.py](./src/composer.py). 
+The codes for composing different input-images as well as the curve-tracing stimuli is included in the [src/composer.py](./src/composer.py). 
 
-## Required packages
+## Requirements
 We used Python 3.9 and the following packages for our training and analysis:
 - torch (1.13.0+cu116)
 - numpy (1.26)
 - Pillow (9.3)
 - torchvision (0.14.0+cu116)
 - matplotlib (3.6)
-*Note 0:* Other than Python and packages listed above, our code itself does not require any explicit setup or install. Although it is important to download the relevant datasets to [./data](./data/) directory for the respective experiment.
-*Note 1:* We used NVIDIA A100 for training the models, and hence PyTorch with Cuda is listed above. But for running the notebooks and the Demo, the code could run without any problem on CPU or Apple-silicon.  
+*Note 0:* Other than Python and packages listed above, our code itself does not require any explicit setup or install. Although it is important to download the relevant datasets to [data](./data/) directory for the respective experiment.
+*Note 1:* We used NVIDIA A100 for training the models, and hence PyTorch with Cuda is listed above. For using the notebooks or the demo, the code should run without any problem on CPU or Apple-silicon.  
 *Note 2:* For the COCO experiment, the COCO python tools (pycocotools) should be installed inside the src folder (see [COCO-API](https://github.com/cocodataset/cocoapi)).
