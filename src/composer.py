@@ -1899,6 +1899,84 @@ class ArrowCur_DS(Dataset):
 
 
 
+
+class Search_MM(Dataset):
+    def __init__(self,
+                 mnist_dataset: Dataset,  # MNIST datasets
+                 n_grid: int = 4,  # image size
+                 n_iter: int = 3,  # number of iterations
+                 noise: float = 0.1
+                 ):
+        
+        super().__init__()
+        self.ti = 0.5 # texture intensity
+        self.n_mods = 3  # number of modalities
+        self.len_mods = (10, 6, 3)  # number of classes per modality
+        self.dh, self.dw = 32, 32  # digit size
+        self.digits = mnist_dataset
+        self.colors = Colors(0.25)
+        self.textures = Textures(self.dh, self.dw)
+        self.n_grid = n_grid
+        self.n_iter = n_iter
+        self.noise = noise
+        self.n_colors = len(self.colors)
+        self.n_textures = len(self.textures)
+        self.h, self.w = self.n_grid * self.dh, self.n_grid * self.dw
+        self.transform = transforms.Compose([
+            transforms.Pad(2),
+            transforms.RandomRotation(15)
+        ])
+        self.class_ids = get_classes(self.digits, 10)
+
+    def get_dyct(self, idx: int, c: int, t: int):
+        digit, y = self.digits.__getitem__(idx)
+        digit = self.transform(digit)
+        return digit, y, self.colors[c], self.textures[t]
+
+    def __len__(self):
+        return self.digits.__len__()
+
+    def __getitem__(self, d: int):
+        t_y = torch.randint(0, 10, (1, ))
+        t_c = torch.randint(0, self.n_colors, (1, ))
+        t_t = torch.randint(0, self.n_textures, (1, )) 
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = torch.zeros(self.n_grid, self.n_grid, self.n_mods).long()
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        # labels = torch.zeros(self.n_iter, self.n_mods).long()  # (n_iter, n_modalities)
+        hot_labels = torch.zeros(self.n_iter, sum(self.len_mods)).float()
+        # labels[:, 0], labels[:, 1], labels[:, 2] = t_y, t_c, t_t
+        labels = 0
+        hot_labels[:, t_y] = 1.0
+        hot_labels[:, self.len_mods[0] + t_c] = 1.0
+        hot_labels[:, self.len_mods[0] + self.len_mods[1] + t_t] = 1.0
+
+        counter = 0
+        scase = 0 if torch.rand(1) < 0.1 else 1 if torch.rand(1) < 0.8 else 2 if torch.rand(1) < 0.9 else 3
+        rand_i, rand_j = torch.randperm(self.n_grid), torch.randperm(self.n_grid)
+        for i in rand_i:
+            for j in rand_j:
+                if counter < scase:
+                    d = random.choice(self.class_ids[t_y])
+                    c, t = t_c, t_t
+                    counter += 1
+                else:
+                    d = torch.randint(0, len(self.digits), (1, )).item()
+                    c = torch.randint(0, len(self.colors), (1, )).item()  # color
+                    t = torch.randint(0, len(self.textures), (1, )).item()  # texture
+                digit, y, color, texture = self.get_dyct(d, c, t)
+                x = self.ti * texture * (1.0 - digit) + color * digit  # composite
+                composites[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = x
+                components[i, j, 0], components[i, j, 1], components[i, j, 2] = y, c, t
+                if y == t_y and c == t_c and t == t_t:
+                    masks[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = 1.0
+                # if torch.rand(1) < 0.125:
+                #     break
+        composites, masks = routine_01(composites, masks, self.noise)
+        return composites, labels, masks, components, hot_labels
+
 class Cued_CIFAR(Dataset):
     def __init__(self,
                  cifar_dataset: Dataset,  # MNIST datasets
