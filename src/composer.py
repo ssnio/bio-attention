@@ -1898,6 +1898,67 @@ class ArrowCur_DS(Dataset):
         return composites, labels, masks, components, hot_labels
 
 
+
+class Cued_CIFAR(Dataset):
+    def __init__(self,
+                 cifar_dataset: Dataset,  # MNIST datasets
+                 fix_attend: tuple,  # number of fixate and attend iterations
+                 n_grid: int = 3,  # image size
+                 noise: float = 0.25,  # noise scale
+                 ):
+        
+        super().__init__()
+        self.dataset = cifar_dataset
+        self.fixate, self.attend = fix_attend
+        self.n_iter = sum(fix_attend)
+        self.n_grid = n_grid
+        self.noise = noise
+        self.hh, self.ww = 32, 32  # image size
+        self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
+        self.transform = transforms.Compose([
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomGrayscale(p=0.5),
+                transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+                transforms.RandomAutocontrast(p=0.5),
+            ])
+        self.cue = gaussian_patch(self.hh, self.ww, 5)
+
+    def build_valid_test(self):
+        self.transform = lambda x: x
+        self.noise = 0.0
+    
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int):
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        components = 0
+        hot_labels = 0
+        
+        set_target = True
+        rand_i, rand_j = torch.randperm(self.n_grid), torch.randperm(self.n_grid)
+        for i in rand_i:
+            for j in rand_j:
+                if set_target:
+                    x, y = self.dataset[idx]
+                    x = self.transform(x)
+                    labels[:] = y
+                    composites[:self.fixate, :, i*32:(i+1)*32, j*32:(j+1)*32] = self.cue
+                    composites[self.fixate:, :, i*32:(i+1)*32, j*32:(j+1)*32] = x
+                    masks[:self.fixate, :, i*32:(i+1)*32, j*32:(j+1)*32] = self.cue
+                    masks[self.fixate:, :, i*32:(i+1)*32, j*32:(j+1)*32] = 1.0
+                    set_target = False
+                else:
+                    idx = torch.randint(len(self.dataset), (1,))
+                    x, y = self.dataset[idx]
+                    x = self.transform(x)
+                    composites[self.fixate:, :, i*32:(i+1)*32, j*32:(j+1)*32] = x
+        composites, masks = routine_01(composites, masks, self.noise)
+        return composites, labels, masks, components, hot_labels
+
 class Single_CIFAR(Dataset):
     def __init__(self,
                  cifar_dataset: Dataset,  # MNIST datasets
