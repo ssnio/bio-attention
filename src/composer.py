@@ -1900,6 +1900,31 @@ class ArrowCur_DS(Dataset):
 
 
 
+class Textures:
+    def __init__(self, h: int, w: int):
+        self.h, self.w = h, w
+        self.n_textures = 3
+
+    def repetitive(self, n: int = 5):
+        x = 1.0 * (torch.rand(1, n, n) < 0.5)
+        x = x.repeat(1, n+self.h//n, n+self.w//n)[:, :self.h, :self.w]
+        return x
+
+    def salt_pepper(self, p: float = 0.5):
+        return 1.0 * (torch.rand(1, self.h, self.w) < p)
+
+    def pink(self):
+        x = pink((self.h, self.w), c=2.5, a=0.5, actfun=torch.cos)
+        x = 0.5 + 0.5 * x
+        return x
+
+    def __len__(self):
+        return self.n_textures
+
+    def __getitem__(self, i):
+        return self.salt_pepper() if i == 0 else self.repetitive() if i == 1 else self.pink()
+
+
 class Recognition_MM(Dataset):
     def __init__(self,
                  mnist_dataset: Dataset,  # MNIST datasets
