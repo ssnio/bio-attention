@@ -1900,6 +1900,28 @@ class ArrowCur_DS(Dataset):
 
 
 
+class Colors:
+    def __init__(self, noise: float = 0.0) -> None:
+        self.noise = noise
+        self.colors = torch.tensor([
+            [1.0, 0.0, 0.0,],  # red
+            [0.0, 1.0, 0.0,],  # green
+            [0.0, 0.0, 1.0,],  # blue
+            [0.7, 0.7, 0.0,],  # yellow
+            [0.0, 0.7, 0.7,],  # cyan
+            [0.7, 0.0, 0.7,],  # magenta
+        ]).reshape(-1, 3, 1, 1)
+        self.n_colors = self.colors.shape[0]
+        
+    def __len__(self):
+        return self.n_colors
+    
+    def __getitem__(self, i):
+        c = self.colors[i]
+        n = torch.randn_like(c) * self.noise * torch.rand(1)
+        return (c + n).clamp(0.0, 1.0)
+
+
 class Textures:
     def __init__(self, h: int, w: int):
         self.h, self.w = h, w
