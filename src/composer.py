@@ -1900,6 +1900,54 @@ class ArrowCur_DS(Dataset):
 
 
 
+class Recognition_MM(Dataset):
+    def __init__(self,
+                 mnist_dataset: Dataset,  # MNIST datasets
+                 n_grid: int = 4,  # image size
+                 ):
+        
+        super().__init__()
+        self.ti = 0.5 # texture intensity
+        self.n_mods = 3
+        self.dh, self.dw = 32, 32  # digit size
+        self.digits = mnist_dataset
+        self.colors = Colors(0.25)
+        self.textures = Textures(self.dh, self.dw)
+        self.n_grid = n_grid
+        self.n_iter = 1
+        self.n_colors = len(self.colors)
+        self.n_textures = len(self.textures)
+        self.h, self.w = self.n_grid * self.dh, self.n_grid * self.dw
+        self.transform = transforms.Compose([
+            transforms.Pad(2),
+            transforms.RandomRotation(15)
+        ])
+
+    def __len__(self):
+        return self.digits.__len__()
+
+    def __getitem__(self, d: int):
+        digit, y = self.digits.__getitem__(d)  # digit and label
+        digit = self.transform(digit)
+        c = torch.randint(0, self.n_colors, (1, )).item()  # color
+        t = torch.randint(0, self.n_textures, (1, )).item()  # texture
+        x = self.ti * self.textures[t] * (1.0 - digit) + self.colors[c] * digit  # composite
+        i, j = torch.randint(0, self.n_grid, (2, ))
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = 0
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter, self.n_mods).long()  # (n_iter, n_modalities)
+        hot_labels = 0
+
+        composites[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = x
+        masks[0, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = digit
+        masks = 2.0 * (masks - 0.5)
+        labels[:, 0], labels[:, 1], labels[:, 2] = y, c, t
+
+        return composites, labels, masks, components, hot_labels
+
+
 class Search_MM(Dataset):
     def __init__(self,
                  mnist_dataset: Dataset,  # MNIST datasets
