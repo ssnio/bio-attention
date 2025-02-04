@@ -1993,3 +1993,107 @@ class Scattered_CIFAR(Dataset):
 
         return composites, labels, masks, components, hot_labels
 
+
+class Cued_Scattered_CIFAR(Dataset):
+    def __init__(self,
+                 cifar_dataset: Dataset,  # MNIST datasets
+                 fix_attend: tuple,  # number of fixate and attend iterations
+                 n_grid: int = 3,  # image size
+                 noise: float = 0.25,  # noise scale
+                 ):
+        
+        super().__init__()
+        self.dataset = cifar_dataset
+        self.fixate, self.attend = fix_attend
+        self.n_iter = sum(fix_attend)
+        self.n_grid = n_grid
+        self.noise = noise
+        self.zh, self.zw = 16, 16
+        self.hh, self.ww = 32, 32  # image size
+        self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
+        self.flip = transforms.RandomHorizontalFlip(p=0.5)
+        self.trans = transforms.Compose([
+                transforms.RandomGrayscale(p=0.5),
+                transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+                transforms.RandomAutocontrast(p=0.5),
+            ])
+        self.cue = gaussian_patch(self.hh, self.ww, 5)
+
+    def scatter(self) -> torch.Tensor:
+        n = (self.n_grid * self.n_grid) - 1
+        z = torch.zeros(4 * n, 3, self.zh, self.zw)
+        for k in range(n):
+            x, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
+            for i in range(2):
+                for j in range(2):
+                    sh = slice(i*self.zh, (i+1)*self.zh)
+                    sw = slice(j*self.zw, (j+1)*self.zw)
+                    z[j + 2 * i + 4 * k] = self.trans(x[:, sh, sw])
+        z = z[torch.randperm(4 * n)]
+        return z
+
+    def tile(self, x: torch.Tensor) -> torch.Tensor:
+        for i in range(2):
+            for j in range(2):
+                sh = slice(i*self.zh, (i+1)*self.zh)
+                sw = slice(j*self.zw, (j+1)*self.zw)
+                x[:, sh, sw] = self.trans(x[:, sh, sw])
+        return x
+
+    def build_valid_test(self):
+        self.flip = lambda x: x
+        self.trans = lambda x: x
+        self.noise = 0.0
+    
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int):
+        # pre-allocation
+        temposite = torch.zeros(3, self.h, self.w)
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        cue = torch.zeros(3, self.h, self.w)
+        components = 0
+        hot_labels = 0
+
+        x, y = self.dataset[idx]
+        labels[:] = y
+        x = self.flip(x)
+
+        i, j = torch.randint(0, self.n_grid, (2, ))
+        tar_i, tar_j = i, j
+        temposite[:, i*self.hh:(i+1)*self.hh, j*self.ww:(j+1)*self.ww] = x
+        z = self.scatter()
+        k = 0
+        for ii in range(2 * self.n_grid):
+            for jj in range(2 * self.n_grid):
+                if ii not in (2 * i, (2 * i) + 1) or jj not in (2 * j, (2 * j) + 1):
+                    temposite[:, ii*self.zh:(ii+1)*self.zh, jj*self.zw:(jj+1)*self.zw] = z[k]
+                    k += 1
+        if i == 0:
+            si = torch.randint(0, (self.n_grid - 1) * self.hh, (1, ))  # shifts
+        elif i == self.n_grid - 1:
+            si = - torch.randint(0, (self.n_grid - 1) * self.hh, (1, ))
+        else:
+            si = torch.randint(-self.hh, self.hh, (1, ))  # shifts
+        if j == 0:
+            sj = torch.randint(0, (self.n_grid - 1) * self.ww, (1, ))  # shifts
+        elif j == self.n_grid - 1:
+            sj = - torch.randint(0, (self.n_grid - 1) * self.ww, (1, ))
+        else:
+            sj = torch.randint(-self.ww, self.ww, (1, ))  # shifts
+        
+        cue[:, tar_i*self.hh:(tar_i+1)*self.hh, tar_j*self.ww:(tar_j+1)*self.ww] = self.cue
+        cue = torch.roll(cue, shifts=(si, sj), dims=(1, 2))
+        temposite = torch.roll(temposite, shifts=(si, sj), dims=(1, 2))
+        masks[:self.fixate] = cue[0:1]
+        masks[self.fixate:, :, i*self.hh+si:(i+1)*self.hh+si, j*self.ww+sj:(j+1)*self.ww+sj] = 1.0
+        composites[:self.fixate] = cue
+        composites[self.fixate:] = temposite
+        composites, masks = routine_01(composites, masks, self.noise)
+        temposite, x, z, cue = None, None, None, None
+
+        return composites, labels, masks, components, hot_labels
+
