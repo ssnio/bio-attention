@@ -1959,6 +1959,7 @@ class Cued_CIFAR(Dataset):
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
+
 class Single_CIFAR(Dataset):
     def __init__(self,
                  cifar_dataset: Dataset,  # MNIST datasets
