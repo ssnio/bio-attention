@@ -1898,6 +1898,57 @@ class ArrowCur_DS(Dataset):
         return composites, labels, masks, components, hot_labels
 
 
+class Single_CIFAR(Dataset):
+    def __init__(self,
+                 cifar_dataset: Dataset,  # MNIST datasets
+                 n_iter: int,  # number of fixate and attend iterations
+                 n_grid: int = 3,  # image size
+                 noise: float = 0.25,  # noise scale
+                 ):
+        
+        super().__init__()
+        self.dataset = cifar_dataset
+        self.n_iter = n_iter
+        self.n_grid = n_grid
+        self.noise = noise
+        self.hh, self.ww = 32, 32  # image size
+        self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
+        self.transform = transforms.Compose([
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomGrayscale(p=0.5),
+                transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+                transforms.RandomAutocontrast(p=0.5),
+            ])
+
+    def build_valid_test(self):
+        self.transform = lambda x: x
+        self.noise = 0.0
+    
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int):
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        masks = 0
+        components = 0
+        hot_labels = 0
+
+        new_hw = torch.randint(self.ww, 2 * self.ww, (1, ))
+        i = torch.randint(0, self.h - new_hw, (1, ))
+        j = torch.randint(0, self.w - new_hw, (1, ))
+        x, y = self.dataset[idx]
+        x = transforms.functional.resize(x, size=(new_hw, new_hw), antialias=True)
+        x = self.transform(x)
+        labels[:] = y
+        composites[:, :, i:i+new_hw, j:j+new_hw] = x
+        composites += torch.rand(1) * self.noise * torch.rand_like(composites)
+        composites = torch.clamp(composites, 0.0, 1.0)
+
+        return composites, labels, masks, components, hot_labels
+
+
 class Scattered_CIFAR(Dataset):
     def __init__(self,
                  cifar_dataset: Dataset,  # MNIST datasets
