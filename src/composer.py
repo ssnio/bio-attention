@@ -2191,6 +2191,8 @@ class Scattered_CIFAR(Dataset):
                  n_iter: int,  # number of fixate and attend iterations
                  n_grid: int = 3,  # image size
                  noise: float = 0.25,  # noise scale
+                 in_dims: tuple = (3, 32, 32),
+                 hard: bool = False,
                  ):
         
         super().__init__()
@@ -2198,8 +2200,9 @@ class Scattered_CIFAR(Dataset):
         self.n_iter = n_iter
         self.n_grid = n_grid
         self.noise = noise
-        self.zh, self.zw = 16, 16
-        self.hh, self.ww = 32, 32  # image size
+        self.hard = hard
+        _, self.hh, self.ww = in_dims  # image size
+        self.zh, self.zw = self.hh//2, self.ww//2
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
         self.flip = transforms.RandomHorizontalFlip(p=0.5)
         self.trans = transforms.Compose([
@@ -2260,20 +2263,9 @@ class Scattered_CIFAR(Dataset):
                 if ii not in (2 * i, (2 * i) + 1) or jj not in (2 * j, (2 * j) + 1):
                     temposite[:, ii*self.zh:(ii+1)*self.zh, jj*self.zw:(jj+1)*self.zw] = z[k]
                     k += 1
-        if i == 0:
-            si = torch.randint(0, (self.n_grid - 1) * self.hh, (1, ))  # shifts
-        elif i == self.n_grid - 1:
-            si = - torch.randint(0, (self.n_grid - 1) * self.hh, (1, ))
-        else:
-            si = torch.randint(-self.hh, self.hh, (1, ))  # shifts
-        if j == 0:
-            sj = torch.randint(0, (self.n_grid - 1) * self.ww, (1, ))  # shifts
-        elif j == self.n_grid - 1:
-            sj = - torch.randint(0, (self.n_grid - 1) * self.ww, (1, ))
-        else:
-            sj = torch.randint(-self.ww, self.ww, (1, ))  # shifts
         
-        composites[:] = torch.roll(temposite, shifts=(si, sj), dims=(1, 2))
+        si, sj = self.get_roll(i, j)
+        composites[:] = torch.roll(temposite, shifts=(si, sj), dims=(-2, -1))
         composites += torch.rand(1) * self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
         temposite, x, z = None, None, None
@@ -2309,8 +2301,9 @@ class Cued_Scattered_CIFAR(Dataset):
     def scatter(self) -> torch.Tensor:
         n = (self.n_grid * self.n_grid) - 1
         z = torch.zeros(4 * n, 3, self.zh, self.zw)
+        o, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
         for k in range(n):
-            x, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
+            x = o if self.hard else self.dataset[torch.randint(len(self.dataset), (1,))][0]
             for i in range(2):
                 for j in range(2):
                     sh = slice(i*self.zh, (i+1)*self.zh)
@@ -2332,6 +2325,11 @@ class Cued_Scattered_CIFAR(Dataset):
         self.trans = lambda x: x
         self.noise = 0.0
     
+    def get_roll(self, i: int, j: int):
+        si = torch.randint(- i * self.hh, (self.n_grid - 1 - i) * self.hh, (1, ))  # shifts
+        sj = torch.randint(- j * self.ww, (self.n_grid - 1 - j) * self.ww, (1, ))  # shifts
+        return si, sj
+
     def __len__(self):
         return len(self.dataset)
 
