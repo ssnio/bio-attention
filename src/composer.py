@@ -2214,8 +2214,9 @@ class Scattered_CIFAR(Dataset):
     def scatter(self) -> torch.Tensor:
         n = (self.n_grid * self.n_grid) - 1
         z = torch.zeros(4 * n, 3, self.zh, self.zw)
+        o, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
         for k in range(n):
-            x, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
+            x = o if self.hard else self.dataset[torch.randint(len(self.dataset), (1,))][0]
             for i in range(2):
                 for j in range(2):
                     sh = slice(i*self.zh, (i+1)*self.zh)
@@ -2237,6 +2238,11 @@ class Scattered_CIFAR(Dataset):
         self.trans = lambda x: x
         self.noise = 0.0
     
+    def get_roll(self, i: int, j: int):
+        si = torch.randint(- i * self.hh, (self.n_grid - 1 - i) * self.hh, (1, ))  # shifts
+        sj = torch.randint(- j * self.ww, (self.n_grid - 1 - j) * self.ww, (1, ))  # shifts
+        return si, sj
+
     def __len__(self):
         return len(self.dataset)
 
@@ -2301,9 +2307,8 @@ class Cued_Scattered_CIFAR(Dataset):
     def scatter(self) -> torch.Tensor:
         n = (self.n_grid * self.n_grid) - 1
         z = torch.zeros(4 * n, 3, self.zh, self.zw)
-        o, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
         for k in range(n):
-            x = o if self.hard else self.dataset[torch.randint(len(self.dataset), (1,))][0]
+            x, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
             for i in range(2):
                 for j in range(2):
                     sh = slice(i*self.zh, (i+1)*self.zh)
@@ -2325,11 +2330,6 @@ class Cued_Scattered_CIFAR(Dataset):
         self.trans = lambda x: x
         self.noise = 0.0
     
-    def get_roll(self, i: int, j: int):
-        si = torch.randint(- i * self.hh, (self.n_grid - 1 - i) * self.hh, (1, ))  # shifts
-        sj = torch.randint(- j * self.ww, (self.n_grid - 1 - j) * self.ww, (1, ))  # shifts
-        return si, sj
-
     def __len__(self):
         return len(self.dataset)
 
