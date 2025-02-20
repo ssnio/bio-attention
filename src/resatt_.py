@@ -138,7 +138,7 @@ class AttentionModel(torch.nn.Module):
         self.map_dims = [(1, self.in_dims[1], self.in_dims[2])]
         self.normalize = Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         self.first_conv = torch.nn.Sequential(
-            torch.nn.Conv2d(3, self.channels[0], self.first_k, 2, self.first_p, bias=False),
+            torch.nn.Conv2d(3, self.channels[0], self.first_k, 2, self.first_p, bias=bias),
             makenorm(self.norm, self.channels[0]),
             self.fun,
             torch.nn.Identity() if skip_maxpool else torch.nn.MaxPool2d(3, 2, 1)
@@ -152,7 +152,7 @@ class AttentionModel(torch.nn.Module):
         self.last_deconv = torch.nn.Sequential(
             torch.nn.Upsample(scale_factor=2 if skip_maxpool else 4),
             makenorm(self.norm, 2 * self.channels[0]),
-            torch.nn.ConvTranspose2d(2 * self.channels[0], 1, 3, 1, 1, bias=False),
+            torch.nn.ConvTranspose2d(2 * self.channels[0], 1, 3, 1, 1, bias=bias),
             torch.nn.Tanh()
         )
         self.fmid = torch.nn.Sequential(
