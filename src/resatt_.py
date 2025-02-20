@@ -36,9 +36,10 @@ class Block(torch.nn.Module):
         self.fun = fun
         self.residual = residual
         ds = in_channels != out_channels
+        bias = True if norm == 'layer' else False
         if ds:
             self.downsample = torch.nn.Sequential(
-               torch.nn.Conv2d(in_channels, out_channels, 1, 2, 0, bias=False),
+               torch.nn.Conv2d(in_channels, out_channels, 1, 2, 0, bias=bias),
                 makenorm(norm, out_channels)
             )
             self.upsample = torch.nn.Sequential(
@@ -50,36 +51,36 @@ class Block(torch.nn.Module):
             self.upsample = torch.nn.Identity()
         if residual:
             self.deconv_res = torch.nn.Sequential(
-                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 2, 2, 0, bias=False),
+                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 2, 2, 0, bias=bias),
                 makenorm(norm, in_channels)
             ) if ds else torch.nn.Sequential(
-                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 3, 1, 1, bias=False),
+                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 3, 1, 1, bias=bias),
                 makenorm(norm, in_channels)
             )
         if fsingle:
             self.conv = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels, out_channels, 3, 1 if not ds else 2, 1, bias=False),
+                torch.nn.Conv2d(in_channels, out_channels, 3, 1 if not ds else 2, 1, bias=bias),
                 makenorm(norm, out_channels)
             )
         else:
             self.conv = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels, out_channels, 3, 1, 1, bias=False),
+                torch.nn.Conv2d(in_channels, out_channels, 3, 1, 1, bias=bias),
                 makenorm(norm, out_channels),
                 fun,
-                torch.nn.Conv2d(out_channels, out_channels, 3, 1 if not ds else 2, 1, bias=False),
+                torch.nn.Conv2d(out_channels, out_channels, 3, 1 if not ds else 2, 1, bias=bias),
                 makenorm(norm, out_channels)
             )
         if bsingle:
             self.deconv = torch.nn.Sequential(
-                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 3, 1, 1, bias=False),
+                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 3, 1, 1, bias=bias),
                 makenorm(norm, in_channels)
             )
         else:
             self.deconv = torch.nn.Sequential(
-                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 3, 1, 1, bias=False),
+                torch.nn.ConvTranspose2d(2 * out_channels, in_channels, 3, 1, 1, bias=bias),
                 makenorm(norm, in_channels),
                 fun,
-                torch.nn.ConvTranspose2d(in_channels, in_channels, 3, 1, 1, bias=False),
+                torch.nn.ConvTranspose2d(in_channels, in_channels, 3, 1, 1, bias=bias),
                 makenorm(norm, in_channels)
             )
 
@@ -125,6 +126,7 @@ class AttentionModel(torch.nn.Module):
         self.fun = fun
         self.task_fun = task_fun
         self.norm = norm
+        bias = True if norm == 'layer' else False
         self.out_dim = out_dim
         self.n_classes = n_classes
         self.mid_dim = mid_dim
