@@ -2079,6 +2079,7 @@ class Cued_CIFAR(Dataset):
                  fix_attend: tuple,  # number of fixate and attend iterations
                  n_grid: int = 3,  # image size
                  noise: float = 0.25,  # noise scale
+                 in_dims: tuple = (3, 32, 32)
                  ):
         
         super().__init__()
