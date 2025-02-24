@@ -2087,7 +2087,7 @@ class Cued_CIFAR(Dataset):
         self.n_iter = sum(fix_attend)
         self.n_grid = n_grid
         self.noise = noise
-        self.hh, self.ww = 32, 32  # image size
+        _, self.hh, self.ww = in_dims # image size
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
         self.transform = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
@@ -2096,11 +2096,23 @@ class Cued_CIFAR(Dataset):
                 transforms.RandomAutocontrast(p=0.5),
             ])
         self.cue = gaussian_patch(self.hh, self.ww, 5)
+        self.k = 5
+        self.s = 8.0
+        self.gaussian_grid = blur_edges(self.h, self.w, self.n_grid, self.n_grid, self.s).unsqueeze(0)
 
     def build_valid_test(self):
         self.transform = lambda x: x
         self.noise = 0.0
     
+    def edge_blur(self, x: torch.Tensor, gg: torch.Tensor):
+        y = transforms.functional.gaussian_blur(x, self.k, self.s)
+        return x * gg + y * (1.0 - gg)
+
+    def get_roll(self, i: int, j: int):
+        si = torch.randint(- i * self.hh, (self.n_grid - 1 - i) * self.hh, (1, ))  # shifts
+        sj = torch.randint(- j * self.ww, (self.n_grid - 1 - j) * self.ww, (1, ))  # shifts
+        return si, sj
+
     def __len__(self):
         return len(self.dataset)
 
@@ -2116,20 +2128,28 @@ class Cued_CIFAR(Dataset):
         rand_i, rand_j = torch.randperm(self.n_grid), torch.randperm(self.n_grid)
         for i in rand_i:
             for j in rand_j:
+                i_slice, j_slice = slice(i*self.hh, (i+1)*self.hh), slice(j*self.ww, (j+1)*self.ww)
                 if set_target:
                     x, y = self.dataset[idx]
                     x = self.transform(x)
                     labels[:] = y
-                    composites[:self.fixate, :, i*32:(i+1)*32, j*32:(j+1)*32] = self.cue
-                    composites[self.fixate:, :, i*32:(i+1)*32, j*32:(j+1)*32] = x
-                    masks[:self.fixate, :, i*32:(i+1)*32, j*32:(j+1)*32] = self.cue
-                    masks[self.fixate:, :, i*32:(i+1)*32, j*32:(j+1)*32] = 1.0
+                    composites[:self.fixate, :, i_slice, j_slice] = self.cue
+                    composites[self.fixate:, :, i_slice, j_slice] = x
+                    masks[:self.fixate, :, i_slice, j_slice] = self.cue
+                    masks[self.fixate:, :, i_slice, j_slice] = 1.0
                     set_target = False
+                    ti, tj = i, j
                 else:
                     idx = torch.randint(len(self.dataset), (1,))
                     x, y = self.dataset[idx]
                     x = self.transform(x)
-                    composites[self.fixate:, :, i*32:(i+1)*32, j*32:(j+1)*32] = x
+                    composites[self.fixate:, :, i_slice, j_slice] = x
+        
+        si, sj = self.get_roll(ti, tj)
+        composites[:] = torch.roll(composites[:], shifts=(si, sj), dims=(-2, -1))
+        masks[:] = torch.roll(masks[:], shifts=(si, sj), dims=(-2, -1))
+        gg = torch.roll(self.gaussian_grid, shifts=(si, sj), dims=(-2, -1))
+        composites[self.fixate:] = self.edge_blur(composites[self.fixate:], gg)
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
@@ -2285,6 +2305,7 @@ class Cued_Scattered_CIFAR(Dataset):
                  fix_attend: tuple,  # number of fixate and attend iterations
                  n_grid: int = 3,  # image size
                  noise: float = 0.25,  # noise scale
+                 in_dims: tuple = (3, 32, 32)
                  ):
         
         super().__init__()
