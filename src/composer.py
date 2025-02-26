@@ -2000,7 +2000,8 @@ class Search_MM(Dataset):
                  mnist_dataset: Dataset,  # MNIST datasets
                  n_grid: int = 4,  # image size
                  n_iter: int = 3,  # number of iterations
-                 noise: float = 0.1
+                 noise: float = 0.1,
+                 scase: int = -1,
                  ):
         
         super().__init__()
@@ -2014,6 +2015,7 @@ class Search_MM(Dataset):
         self.n_grid = n_grid
         self.n_iter = n_iter
         self.noise = noise
+        self.scase = scase
         self.n_colors = len(self.colors)
         self.n_textures = len(self.textures)
         self.h, self.w = self.n_grid * self.dh, self.n_grid * self.dw
@@ -2049,26 +2051,30 @@ class Search_MM(Dataset):
         hot_labels[:, self.len_mods[0] + self.len_mods[1] + t_t] = 1.0
 
         counter = 0
-        scase = 0 if torch.rand(1) < 0.1 else 1 if torch.rand(1) < 0.8 else 2 if torch.rand(1) < 0.9 else 3
-        rand_i, rand_j = torch.randperm(self.n_grid), torch.randperm(self.n_grid)
-        for i in rand_i:
-            for j in rand_j:
-                if counter < scase:
-                    d = random.choice(self.class_ids[t_y])
-                    c, t = t_c, t_t
-                    counter += 1
-                else:
-                    d = torch.randint(0, len(self.digits), (1, )).item()
-                    c = torch.randint(0, len(self.colors), (1, )).item()  # color
-                    t = torch.randint(0, len(self.textures), (1, )).item()  # texture
-                digit, y, color, texture = self.get_dyct(d, c, t)
-                x = self.ti * texture * (1.0 - digit) + color * digit  # composite
-                composites[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = x
-                components[i, j, 0], components[i, j, 1], components[i, j, 2] = y, c, t
-                if y == t_y and c == t_c and t == t_t:
-                    masks[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = 1.0
-                # if torch.rand(1) < 0.125:
-                #     break
+        if self.scase == -1:
+            scase = 0 if torch.rand(1) < 0.1 else 1 if torch.rand(1) < 0.8 else 2 if torch.rand(1) < 0.9 else 3
+        else:
+            scase = self.scase
+        # rand_i, rand_j = torch.randperm(self.n_grid), torch.randperm(self.n_grid)
+        rand_ij = torch.randperm(self.n_grid * self.n_grid)
+        for ij in rand_ij:
+            i, j = ij // self.n_grid, ij % self.n_grid
+            if counter < scase:
+                d = random.choice(self.class_ids[t_y])
+                c, t = t_c, t_t
+                counter += 1
+            else:
+                d = torch.randint(0, len(self.digits), (1, )).item()
+                c = torch.randint(0, len(self.colors), (1, )).item()  # color
+                t = torch.randint(0, len(self.textures), (1, )).item()  # texture
+            digit, y, color, texture = self.get_dyct(d, c, t)
+            x = self.ti * texture * (1.0 - digit) + color * digit  # composite
+            composites[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = x
+            components[i, j, 0], components[i, j, 1], components[i, j, 2] = y, c, t
+            if y == t_y and c == t_c and t == t_t:
+                masks[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = 1.0
+            # if torch.rand(1) < 0.125:
+            #     break
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
