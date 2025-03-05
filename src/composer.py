@@ -2446,6 +2446,7 @@ class Scattered_CIFAR(Dataset):
                  noise: float = 0.25,  # noise scale
                  in_dims: tuple = (3, 32, 32),
                  hard: bool = False,
+                 separate: bool = True,
                  ):
         
         super().__init__()
@@ -2456,12 +2457,13 @@ class Scattered_CIFAR(Dataset):
         self.noise = noise
         self.n_pieces = n_pieces
         self.hard = hard
+        self.separate = separate
         self.png = self.n_grid * self.n_pieces
         _, self.hh, self.ww = in_dims  # image size
         assert self.hh%self.n_pieces == 0 and self.ww%self.n_pieces == 0, 'Image size must be divisible by n_pieces!'
         self.zh, self.zw = self.hh//self.n_pieces, self.ww//self.n_pieces
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
-        self.fold = torch.nn.Fold(output_size=(self.png * self.zh, self.png * self.zw), kernel_size=(self.zh, self.zw), stride=(self.zh, self.zw))
+        self.fold = torch.nn.Fold(output_size=(self.h, self.w), kernel_size=(self.zh, self.zw), stride=(self.zh, self.zw))
         self.trans = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomGrayscale(p=0.5),
@@ -2475,11 +2477,10 @@ class Scattered_CIFAR(Dataset):
         self.noise = 0.0
 
     def scatter(self) -> torch.Tensor:
-        n = (self.n_grid * self.n_grid)
+        n = self.n_grid * self.n_grid
         s = self.n_pieces * self.n_pieces
         z = torch.zeros(3, self.zh, self.zw, n * s)
-        i = torch.randint(len(self.dataset), (1, ))
-        k, _ = self.dataset[i]
+        k, _ = self.dataset[torch.randint(len(self.dataset), (1, ))]
         for j in range(n):
             x = k if self.hard else self.dataset[torch.randint(len(self.dataset), (1, ))][0]
             x = self.trans(x)
@@ -2497,8 +2498,9 @@ class Scattered_CIFAR(Dataset):
         return x
 
     def draw_grid_lines(self, x: torch.Tensor):
-        x[:, torch.arange(0, self.png*self.zh, self.zh)] = 0.0
-        x[:, :, torch.arange(0, self.png*self.zw, self.zw)] = 0.0
+        n = natural_noise(self.h, self.w)
+        x[:, torch.arange(0, self.png*self.zh, self.zh)] = n[:, torch.arange(0, self.png*self.zh, self.zh)]
+        x[:, :, torch.arange(0, self.png*self.zw, self.zw)] = n[:, :, torch.arange(0, self.png*self.zw, self.zw)]
         return x
     
     def get_roll(self, i: int, j: int):
@@ -2525,7 +2527,7 @@ class Scattered_CIFAR(Dataset):
         i, j = torch.randint(0, self.png - self.n_pieces, (2, ))
         z[:, i*self.zh:(i+self.n_pieces)*self.zh, j*self.zw:(j+self.n_pieces)*self.zw] = x
 
-        z = self.draw_grid_lines(z) if self.train else z
+        z = self.draw_grid_lines(z) if (self.train and self.separate) else z
         si, sj = self.get_roll(i, j)
         composites[:] = torch.roll(z, shifts=(si, sj), dims=(-2, -1))
         composites += torch.rand(1) * self.noise * torch.rand_like(composites)
