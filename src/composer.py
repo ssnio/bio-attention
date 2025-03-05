@@ -2660,6 +2660,8 @@ class Search_CIFAR(Dataset):
         self.noise = noise
         self.in_dims = in_dims
         self.n_classes = n_classes
+        self.k = 5
+        self.s = 8.0
         _, self.hh, self.ww = in_dims # image size
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
         self.transform = transforms.Compose([
@@ -2668,8 +2670,7 @@ class Search_CIFAR(Dataset):
                 transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
                 transforms.RandomAutocontrast(p=0.5),
             ])
-        self.k = 5
-        self.s = 8.0
+        self.blur = transforms.GaussianBlur(self.k, self.s)
         self.gaussian_grid = blur_edges(self.h, self.w, self.n_grid, self.n_grid, self.s).unsqueeze(0)
 
     def build_valid_test(self):
@@ -2719,11 +2720,6 @@ class Search_CIFAR(Dataset):
                 x = self.transform(x)
                 composites[:, :, i_slice, j_slice] = x
     
-        si, sj = self.get_roll(ti, tj)
-        composites[:] = torch.roll(composites[:], shifts=(si, sj), dims=(-2, -1))
-        masks[:] = torch.roll(masks[:], shifts=(si, sj), dims=(-2, -1))
-        gg = torch.roll(self.gaussian_grid, shifts=(si, sj), dims=(-2, -1))
-        composites[:] = self.edge_blur(composites[:], gg)
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
