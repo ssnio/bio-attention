@@ -2368,10 +2368,13 @@ class Cued_CIFAR(Dataset):
 
 class Single_CIFAR(Dataset):
     def __init__(self,
-                 cifar_dataset: Dataset,  # MNIST datasets
+                 cifar_dataset: Dataset,  # CIFAR datasets
                  n_iter: int,  # number of fixate and attend iterations
                  n_grid: int = 3,  # image size
                  noise: float = 0.25,  # noise scale
+                 in_dims: tuple = (3, 32, 32),
+                 centered: bool = False,
+                 background: bool = False,
                  ):
         
         super().__init__()
@@ -2379,7 +2382,9 @@ class Single_CIFAR(Dataset):
         self.n_iter = n_iter
         self.n_grid = n_grid
         self.noise = noise
-        self.hh, self.ww = 32, 32  # image size
+        self.centered = centered
+        self.background = background
+        _, self.hh, self.ww = in_dims # image size
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
         self.transform = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
@@ -2396,21 +2401,29 @@ class Single_CIFAR(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+
         # pre-allocation
         composites = torch.zeros(self.n_iter, 3, self.h, self.w)
         labels = torch.zeros(self.n_iter).long()
         masks = 0
         components = 0
         hot_labels = 0
-
-        new_hw = torch.randint(self.ww, 2 * self.ww, (1, ))
-        i = torch.randint(0, self.h - new_hw, (1, ))
-        j = torch.randint(0, self.w - new_hw, (1, ))
-        x, y = self.dataset[idx]
-        x = transforms.functional.resize(x, size=(new_hw, new_hw), antialias=True)
-        x = self.transform(x)
         labels[:] = y
-        composites[:, :, i:i+new_hw, j:j+new_hw] = x
+
+        if self.background:
+            composites = torch.rand_like(composites)
+        if self.centered:
+            x = self.transform(x)
+            composites[:, :, self.hh:2*self.hh, self.ww:2*self.ww] = x
+        else:
+            new_hw = torch.randint(self.ww, 2 * self.ww, (1, ))
+            i = torch.randint(0, self.h - new_hw, (1, ))
+            j = torch.randint(0, self.w - new_hw, (1, ))
+            x = transforms.functional.resize(x, size=(new_hw, new_hw), antialias=True)
+            x = self.transform(x)
+            composites[:, :, i:i+new_hw, j:j+new_hw] = x
+
         composites += torch.rand(1) * self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
 
