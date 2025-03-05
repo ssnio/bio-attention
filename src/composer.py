@@ -2319,7 +2319,7 @@ class Cued_CIFAR(Dataset):
         self.noise = 0.0
     
     def edge_blur(self, x: torch.Tensor, gg: torch.Tensor):
-        y = transforms.functional.gaussian_blur(x, self.k, self.s)
+        y = self.blur(x)
         return x * gg + y * (1.0 - gg)
 
     def get_roll(self, i: int, j: int):
