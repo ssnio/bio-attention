@@ -2640,3 +2640,88 @@ class Cued_Scattered_CIFAR(Dataset):
 
         return composites, labels, masks, components, hot_labels
 
+
+class Search_CIFAR(Dataset):
+    def __init__(self,
+                 cifar_dataset: Dataset,  # CIFAR datasets
+                 n_iter: tuple,  # number of fixate and attend iterations
+                 n_grid: int = 3,  # image size
+                 noise: float = 0.25,  # noise scale
+                 in_dims: tuple = (3, 32, 32),  # image size
+                 n_classes: int = 100,  # number of classes
+                 ):
+        
+        super().__init__()
+        self.dataset = cifar_dataset
+        self.n_iter = n_iter
+        self.n_grid = n_grid
+        self.noise = noise
+        self.in_dims = in_dims
+        self.n_classes = n_classes
+        _, self.hh, self.ww = in_dims # image size
+        self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
+        self.transform = transforms.Compose([
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomGrayscale(p=0.5),
+                transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+                transforms.RandomAutocontrast(p=0.5),
+            ])
+        self.k = 5
+        self.s = 8.0
+        self.gaussian_grid = blur_edges(self.h, self.w, self.n_grid, self.n_grid, self.s).unsqueeze(0)
+
+    def build_valid_test(self):
+        self.transform = lambda x: x
+        self.noise = 0.0
+    
+    def edge_blur(self, x: torch.Tensor, gg: torch.Tensor):
+        y = transforms.functional.gaussian_blur(x, self.k, self.s)
+        return x * gg + y * (1.0 - gg)
+
+    def get_roll(self, i: int, j: int):
+        si = torch.randint(- i * self.hh, (self.n_grid - 1 - i) * self.hh, (1, ))  # shifts
+        sj = torch.randint(- j * self.ww, (self.n_grid - 1 - j) * self.ww, (1, ))  # shifts
+        return si, sj
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int):
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        components = 0
+        hot_labels = torch.zeros(self.n_iter, self.n_classes).float()
+        
+        set_target = True
+        rand_ij = torch.randperm(self.n_grid * self.n_grid)
+        for ij in rand_ij:
+            i, j = ij // self.n_grid, ij % self.n_grid
+            i_slice, j_slice = slice(i*self.hh, (i+1)*self.hh), slice(j*self.ww, (j+1)*self.ww)
+            if set_target:
+                x, y = self.dataset[idx]
+                x = self.transform(x)
+                labels[:] = y
+                composites[:, :, i_slice, j_slice] = x
+                masks[:, :, i_slice, j_slice] = 1.0
+                hot_labels[:, y] = 1.0
+                set_target = False
+                ti, tj = i, j
+            else:
+                while True:
+                    idx = torch.randint(len(self.dataset), (1,))
+                    x, y = self.dataset[idx]
+                    if y != labels[0]:
+                        break
+                x = self.transform(x)
+                composites[:, :, i_slice, j_slice] = x
+    
+        si, sj = self.get_roll(ti, tj)
+        composites[:] = torch.roll(composites[:], shifts=(si, sj), dims=(-2, -1))
+        masks[:] = torch.roll(masks[:], shifts=(si, sj), dims=(-2, -1))
+        gg = torch.roll(self.gaussian_grid, shifts=(si, sj), dims=(-2, -1))
+        composites[:] = self.edge_blur(composites[:], gg)
+        composites, masks = routine_01(composites, masks, self.noise)
+        return composites, labels, masks, components, hot_labels
+
