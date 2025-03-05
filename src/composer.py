@@ -2410,32 +2410,31 @@ class Single_CIFAR(Dataset):
 
     def __getitem__(self, idx: int):
         x, y = self.dataset[idx]
+        x = self.transform(x)
 
         # pre-allocation
-        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
-        labels = torch.zeros(self.n_iter).long()
+        composites = torch.zeros(max(self.n_iter, 1), 3, self.h, self.w)
+        labels = torch.zeros(max(self.n_iter, 1)).long()
         masks = 0
         components = 0
         hot_labels = 0
         labels[:] = y
 
         if self.background:
-            composites = torch.rand_like(composites)
+            composites[:] = natural_noise(self.h, self.w)
         if self.centered:
-            x = self.transform(x)
-            composites[:, :, self.hh:2*self.hh, self.ww:2*self.ww] = x
+            i, j = (self.h - self.hh)//2, (self.w - self.ww)//2
         else:
-            new_hw = torch.randint(self.ww, 2 * self.ww, (1, ))
-            i = torch.randint(0, self.h - new_hw, (1, ))
-            j = torch.randint(0, self.w - new_hw, (1, ))
-            x = transforms.functional.resize(x, size=(new_hw, new_hw), antialias=True)
-            x = self.transform(x)
-            composites[:, :, i:i+new_hw, j:j+new_hw] = x
+            i = torch.randint(0, self.h - self.hh, (1, ))
+            j = torch.randint(0, self.w - self.ww, (1, ))
+        composites[:, :, i:i+self.hh, j:j+self.ww] = x
 
         composites += torch.rand(1) * self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
-
-        return composites, labels, masks, components, hot_labels
+        if self.n_iter == 0:
+            return composites[0], labels[0]
+        else:
+            return composites, labels, masks, components, hot_labels
 
 
 class Scattered_CIFAR(Dataset):
