@@ -2299,6 +2299,8 @@ class Cued_CIFAR(Dataset):
         self.n_iter = sum(fix_attend)
         self.n_grid = n_grid
         self.noise = noise
+        self.k = 5
+        self.s = 8.0
         _, self.hh, self.ww = in_dims # image size
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
         self.fold = torch.nn.Fold(output_size=(self.h, self.w), kernel_size=(self.hh, self.ww), stride=(self.hh, self.ww))
@@ -2308,9 +2310,8 @@ class Cued_CIFAR(Dataset):
                 transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
                 transforms.RandomAutocontrast(p=0.5),
             ])
+        self.blur = transforms.GaussianBlur(self.k, self.s)
         self.cue = gaussian_patch(self.hh, self.ww, 5)
-        self.k = 5
-        self.s = 8.0
         self.gaussian_grid = blur_edges(self.h, self.w, self.n_grid, self.n_grid, self.s).unsqueeze(0)
 
     def build_valid_test(self):
@@ -2675,7 +2676,7 @@ class Search_CIFAR(Dataset):
         self.noise = 0.0
     
     def edge_blur(self, x: torch.Tensor, gg: torch.Tensor):
-        y = transforms.functional.gaussian_blur(x, self.k, self.s)
+        y = self.blur(x)
         return x * gg + y * (1.0 - gg)
 
     def get_roll(self, i: int, j: int):
