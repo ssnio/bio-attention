@@ -2286,7 +2286,7 @@ class ShapeRecognition_MM(Dataset):
 
 class Cued_CIFAR(Dataset):
     def __init__(self,
-                 cifar_dataset: Dataset,  # MNIST datasets
+                 cifar_dataset: Dataset,  # CIFAR datasets
                  fix_attend: tuple,  # number of fixate and attend iterations
                  n_grid: int = 3,  # image size
                  noise: float = 0.25,  # noise scale
@@ -2301,6 +2301,7 @@ class Cued_CIFAR(Dataset):
         self.noise = noise
         _, self.hh, self.ww = in_dims # image size
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
+        self.fold = torch.nn.Fold(output_size=(self.h, self.w), kernel_size=(self.hh, self.ww), stride=(self.hh, self.ww))
         self.transform = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomGrayscale(p=0.5),
@@ -2325,39 +2326,45 @@ class Cued_CIFAR(Dataset):
         sj = torch.randint(- j * self.ww, (self.n_grid - 1 - j) * self.ww, (1, ))  # shifts
         return si, sj
 
+    def sample_n_shuffle(self, t: torch.Tensor) -> torch.Tensor:
+        n = self.n_grid * self.n_grid
+        o = torch.randperm(n)
+        z = torch.zeros(3, self.hh, self.ww, n)
+        z[:, :, :, 0] = t
+        for j in range(1, n):
+            x = self.dataset[torch.randint(len(self.dataset), (1, ))][0]
+            x = self.transform(x)
+            z[:, :, :, j] = x
+        z = z[None, :, :, :, o]
+        z = z.view(1, 3*self.hh*self.ww, n)
+        return self.fold(z)[0], o
+
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+        x = self.transform(x)
+
         # pre-allocation
         composites = torch.zeros(self.n_iter, 3, self.h, self.w)
         labels = torch.zeros(self.n_iter).long()
         masks = torch.zeros(self.n_iter, 1, self.h, self.w)
         components = 0
         hot_labels = 0
+        labels[:] = y
         
-        set_target = True
-        rand_i, rand_j = torch.randperm(self.n_grid), torch.randperm(self.n_grid)
-        for i in rand_i:
-            for j in rand_j:
-                i_slice, j_slice = slice(i*self.hh, (i+1)*self.hh), slice(j*self.ww, (j+1)*self.ww)
-                if set_target:
-                    x, y = self.dataset[idx]
-                    x = self.transform(x)
-                    labels[:] = y
-                    composites[:self.fixate, :, i_slice, j_slice] = self.cue
-                    composites[self.fixate:, :, i_slice, j_slice] = x
-                    masks[:self.fixate, :, i_slice, j_slice] = self.cue
-                    masks[self.fixate:, :, i_slice, j_slice] = 1.0
-                    set_target = False
-                    ti, tj = i, j
-                else:
-                    idx = torch.randint(len(self.dataset), (1,))
-                    x, y = self.dataset[idx]
-                    x = self.transform(x)
-                    composites[self.fixate:, :, i_slice, j_slice] = x
-        
-        si, sj = self.get_roll(ti, tj)
+        z, o = self.sample_n_shuffle(x)
+        tar_ij = (o == 0).nonzero().item()
+        i, j = tar_ij // self.n_grid, tar_ij % self.n_grid
+        i_slice, j_slice = slice(i*self.hh, (i+1)*self.hh), slice(j*self.ww, (j+1)*self.ww)
+
+        composites[:self.fixate, :, i_slice, j_slice] = self.cue
+        composites[self.fixate:] = z
+        masks[:self.fixate, :, i_slice, j_slice] = self.cue
+        masks[self.fixate:, :, i_slice, j_slice] = 1.0
+            
+        si, sj = self.get_roll(i, j)
         composites[:] = torch.roll(composites[:], shifts=(si, sj), dims=(-2, -1))
         masks[:] = torch.roll(masks[:], shifts=(si, sj), dims=(-2, -1))
         gg = torch.roll(self.gaussian_grid, shifts=(si, sj), dims=(-2, -1))
