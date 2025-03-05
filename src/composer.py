@@ -2419,43 +2419,54 @@ class Single_CIFAR(Dataset):
 
 class Scattered_CIFAR(Dataset):
     def __init__(self,
-                 cifar_dataset: Dataset,  # MNIST datasets
+                 cifar_dataset: Dataset,  # CIFAR datasets
                  n_iter: int,  # number of fixate and attend iterations
                  n_grid: int = 3,  # image size
+                 n_pieces: int = 2,  # number of pieces
                  noise: float = 0.25,  # noise scale
                  in_dims: tuple = (3, 32, 32),
                  hard: bool = False,
                  ):
         
         super().__init__()
+        self.train = True
         self.dataset = cifar_dataset
         self.n_iter = n_iter
         self.n_grid = n_grid
         self.noise = noise
+        self.n_pieces = n_pieces
         self.hard = hard
+        self.png = self.n_grid * self.n_pieces
         _, self.hh, self.ww = in_dims  # image size
-        self.zh, self.zw = self.hh//2, self.ww//2
+        assert self.hh%self.n_pieces == 0 and self.ww%self.n_pieces == 0, 'Image size must be divisible by n_pieces!'
+        self.zh, self.zw = self.hh//self.n_pieces, self.ww//self.n_pieces
         self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
-        self.flip = transforms.RandomHorizontalFlip(p=0.5)
+        self.fold = torch.nn.Fold(output_size=(self.png * self.zh, self.png * self.zw), kernel_size=(self.zh, self.zw), stride=(self.zh, self.zw))
         self.trans = transforms.Compose([
+                transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomGrayscale(p=0.5),
                 transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
                 transforms.RandomAutocontrast(p=0.5),
             ])
+        
+    def build_valid_test(self):
+        self.train = False
+        self.trans = lambda x: x
+        self.noise = 0.0
 
     def scatter(self) -> torch.Tensor:
-        n = (self.n_grid * self.n_grid) - 1
-        z = torch.zeros(4 * n, 3, self.zh, self.zw)
-        o, _ = self.dataset[torch.randint(len(self.dataset), (1,))]
-        for k in range(n):
-            x = o if self.hard else self.dataset[torch.randint(len(self.dataset), (1,))][0]
-            for i in range(2):
-                for j in range(2):
-                    sh = slice(i*self.zh, (i+1)*self.zh)
-                    sw = slice(j*self.zw, (j+1)*self.zw)
-                    z[j + 2 * i + 4 * k] = self.trans(x[:, sh, sw])
-        z = z[torch.randperm(4 * n)]
-        return z
+        n = (self.n_grid * self.n_grid)
+        s = self.n_pieces * self.n_pieces
+        z = torch.zeros(3, self.zh, self.zw, n * s)
+        i = torch.randint(len(self.dataset), (1, ))
+        k, _ = self.dataset[i]
+        for j in range(n):
+            x = k if self.hard else self.dataset[torch.randint(len(self.dataset), (1, ))][0]
+            x = self.trans(x)
+            z[:, :, :, s*j:s*(j+1)] = x.unfold(1, self.zh, self.zh).unfold(2, self.zw, self.zw).reshape(3, -1, self.zh, self.zw).permute(0, 2, 3, 1)
+        z = z[None, :, :, :, torch.randperm(n * s)]
+        z = z.view(1, 3*self.zh*self.zw, n * s)
+        return self.fold(z)[0]
 
     def tile(self, x: torch.Tensor) -> torch.Tensor:
         for i in range(2):
@@ -2465,50 +2476,45 @@ class Scattered_CIFAR(Dataset):
                 x[:, sh, sw] = self.trans(x[:, sh, sw])
         return x
 
-    def build_valid_test(self):
-        self.flip = lambda x: x
-        self.trans = lambda x: x
-        self.noise = 0.0
+    def draw_grid_lines(self, x: torch.Tensor):
+        x[:, torch.arange(0, self.png*self.zh, self.zh)] = 0.0
+        x[:, :, torch.arange(0, self.png*self.zw, self.zw)] = 0.0
+        return x
     
     def get_roll(self, i: int, j: int):
-        si = torch.randint(- i * self.hh, (self.n_grid - 1 - i) * self.hh, (1, ))  # shifts
-        sj = torch.randint(- j * self.ww, (self.n_grid - 1 - j) * self.ww, (1, ))  # shifts
+        si = torch.randint(- i * self.zh, (self.png - self.n_pieces - i) * self.zh, (1, ))  # shifts
+        sj = torch.randint(- j * self.zw, (self.png - self.n_pieces - j) * self.zw, (1, ))  # shifts
         return si, sj
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
         # pre-allocation
-        temposite = torch.zeros(3, self.h, self.w)
-        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
-        labels = torch.zeros(self.n_iter).long()
+        composites = torch.zeros(max(self.n_iter, 1), 3, self.h, self.w)
+        labels = torch.zeros(max(self.n_iter, 1)).long()
         masks = 0
         components = 0
         hot_labels = 0
 
-        x, y = self.dataset[idx]
         labels[:] = y
-        x = self.flip(x)
-        x = self.tile(x)
+        x = self.trans(x)
 
-        i, j = torch.randint(0, self.n_grid, (2, ))
-        temposite[:, i*self.hh:(i+1)*self.hh, j*self.ww:(j+1)*self.ww] = x
         z = self.scatter()
-        k = 0
-        for ii in range(2 * self.n_grid):
-            for jj in range(2 * self.n_grid):
-                if ii not in (2 * i, (2 * i) + 1) or jj not in (2 * j, (2 * j) + 1):
-                    temposite[:, ii*self.zh:(ii+1)*self.zh, jj*self.zw:(jj+1)*self.zw] = z[k]
-                    k += 1
-        
+        i, j = torch.randint(0, self.png - self.n_pieces, (2, ))
+        z[:, i*self.zh:(i+self.n_pieces)*self.zh, j*self.zw:(j+self.n_pieces)*self.zw] = x
+
+        z = self.draw_grid_lines(z) if self.train else z
         si, sj = self.get_roll(i, j)
-        composites[:] = torch.roll(temposite, shifts=(si, sj), dims=(-2, -1))
+        composites[:] = torch.roll(z, shifts=(si, sj), dims=(-2, -1))
         composites += torch.rand(1) * self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
-        temposite, x, z = None, None, None
 
-        return composites, labels, masks, components, hot_labels
+        if self.n_iter == 0:
+            return composites[0], labels[0]
+        else:
+            return composites, labels, masks, components, hot_labels
 
 
 class Cued_Scattered_CIFAR(Dataset):
