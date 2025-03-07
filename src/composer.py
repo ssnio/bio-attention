@@ -2084,16 +2084,25 @@ class Shapes(Dataset):
                  directory: str,
                  height: int = 64,
                  width: int = 64,
+                 pre_pad: int = 18,
+                 post_pad: int = 0,
+                 ext: bool = False,
                  ):
         super().__init__()
+        self.ext = ext
+        self.height, self.width, self.pre_pad, self.post_pad = height, width, pre_pad, post_pad
         self.transform = transforms.Compose([
-            transforms.Pad(18),
-            transforms.Resize((64, 64), antialias=True),
+            transforms.Pad(self.pre_pad) if self.pre_pad > 0 else lambda x: x,
+            transforms.Resize((self.height, self.width), antialias=True),
+            transforms.Pad(self.post_pad) if self.post_pad > 0 else lambda x: x,
         ])
         self.raw_shapes = self.load_shapes(directory)
 
     def load_shapes(self, directory):
         shape_names = ["trg.png", "sqr.png", "circ.png", "cross.png", "hex.png", "star.png", "heart.png", "david.png", "crs.png"]
+        if self.ext:
+            shape_names.append("thu.png")
+            shape_names.append("wu.png")
         raw_shapes = []
         for file in shape_names:
             x = 1.0 * (transforms.ToTensor()(PILImage.open(os.path.join(directory, file)))[0])
