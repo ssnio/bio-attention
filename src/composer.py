@@ -1901,16 +1901,21 @@ class ArrowCur_DS(Dataset):
 
 
 class Colors:
-    def __init__(self, noise: float = 0.0) -> None:
+    def __init__(self, noise: float = 0.0, ext: bool = False) -> None:
         self.noise = noise
-        self.colors = torch.tensor([
+        self.ext = ext
+        colors = torch.tensor([
             [1.0, 0.0, 0.0,],  # red
             [0.0, 1.0, 0.0,],  # green
             [0.0, 0.0, 1.0,],  # blue
             [0.7, 0.7, 0.0,],  # yellow
             [0.0, 0.7, 0.7,],  # cyan
             [0.7, 0.0, 0.7,],  # magenta
+            # [0.57, 0.57, 0.57,],  # white
+            # [0.01, 0.01, 0.01,],  # black
         ]).reshape(-1, 3, 1, 1)
+        # self.colors = colors if self.ext else colors[:-2]
+        self.colors = colors
         self.n_colors = self.colors.shape[0]
         
     def __len__(self):
