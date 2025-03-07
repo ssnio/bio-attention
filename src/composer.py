@@ -1928,9 +1928,10 @@ class Colors:
 
 
 class Textures:
-    def __init__(self, h: int, w: int):
+    def __init__(self, h: int, w: int, ext: bool = False):
         self.h, self.w = h, w
-        self.n_textures = 3
+        self.ext = ext
+        self.n_textures = 4 if self.ext else 3
 
     def repetitive(self, n: int = 5):
         x = 1.0 * (torch.rand(1, n, n) < 0.5)
@@ -1945,11 +1946,14 @@ class Textures:
         x = 0.5 + 0.5 * x
         return x
 
+    def solid(self):
+        return torch.rand(3, 1, 1) * torch.ones(1, self.h, self.w)
+
     def __len__(self):
         return self.n_textures
 
     def __getitem__(self, i):
-        return self.salt_pepper() if i == 0 else self.repetitive() if i == 1 else self.pink()
+        return self.salt_pepper() if i == 0 else self.repetitive() if i == 1 else self.pink() if i == 2 else self.solid()
 
 
 class Recognition_MM(Dataset):
