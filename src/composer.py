@@ -2749,6 +2749,8 @@ class ShapeRecognition_FBG(Dataset):
                  noise: float = 0.25,  # noise level
                  hard: bool = False,
                  ext: bool = True,
+                 empty: bool = False,
+                 invert: bool = False,
                  ):
         super().__init__()
 
@@ -2763,6 +2765,8 @@ class ShapeRecognition_FBG(Dataset):
         self.n_iter = n_iter
         self.noise = noise
         self.hard = hard
+        self.empty = empty
+        self.invert = invert
         self.n_shapes = len(self.shapes)
         self.n_colors = len(self.colors)
         self.n_fg_textures = len(self.fg_textures)
@@ -2828,7 +2832,7 @@ class ShapeRecognition_FBG(Dataset):
         background = self.pick_background(t_c, t_t)
 
         # composites[:] = background
-        composites[:] = x + background * (1.0 - m)
+        composites[:] = (0.0 if self.invert else x) + (background * (1.0 - m) if not self.empty else 0.0)
         masks[:] = m
         labels[:, 0], labels[:, 1], labels[:, 2] = t_s, t_c, t_t
         composites, masks = routine_01(composites, masks, self.noise)
