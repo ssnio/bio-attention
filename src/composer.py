@@ -2110,15 +2110,16 @@ class Shapes(Dataset):
             transforms.Resize((self.height, self.width), antialias=True),
             transforms.Pad(self.post_pad) if self.post_pad > 0 else lambda x: x,
         ])
+        self.shape_names = ["trg.png", "sqr.png", "circ.png", "cross.png", "hex.png", "star.png", "heart.png", "david.png", "crs.png"]
+        if self.ext:
+            self.shape_names.append("thu.png")
+            self.shape_names.append("wu.png")
         self.raw_shapes = self.load_shapes(directory)
 
     def load_shapes(self, directory):
-        shape_names = ["trg.png", "sqr.png", "circ.png", "cross.png", "hex.png", "star.png", "heart.png", "david.png", "crs.png"]
-        if self.ext:
-            shape_names.append("thu.png")
-            shape_names.append("wu.png")
+
         raw_shapes = []
-        for file in shape_names:
+        for file in self.shape_names:
             x = 1.0 * (transforms.ToTensor()(PILImage.open(os.path.join(directory, file)))[0])
             raw_shapes.append(self.transform(x.unsqueeze(0)))
         return raw_shapes
