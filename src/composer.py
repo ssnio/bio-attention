@@ -2014,6 +2014,7 @@ class Search_MM(Dataset):
                  ):
         
         super().__init__()
+        self.train = True
         self.ti = 0.5 # texture intensity
         self.n_mods = 3  # number of modalities
         self.len_mods = (10, 6, 3)  # number of classes per modality
@@ -2038,6 +2039,10 @@ class Search_MM(Dataset):
         digit, y = self.digits.__getitem__(idx)
         digit = self.transform(digit)
         return digit, y, self.colors[c], self.textures[t]
+
+    def build_valid_test(self):
+        self.noise = 0.0
+        self.train = False
 
     def __len__(self):
         return self.digits.__len__()
