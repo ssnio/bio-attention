@@ -2151,6 +2151,7 @@ class ShapeSearch_MM(Dataset):
         self.n_grid = n_grid
         self.n_iter = n_iter
         self.noise = noise
+        self.hard = hard
         self.n_shapes = len(self.shapes)
         self.n_colors = len(self.colors)
         self.n_textures = len(self.textures)
@@ -2270,6 +2271,8 @@ class ShapeRecognition_MM(Dataset):
                 t_c = torch.randint(1, self.n_colors, (1, ))
             else:
                 t_t = torch.randint(1, self.n_textures, (1, ))
+        elif self.hard and not self.train:
+            t_s, t_c, t_t = 0, 0, 0
         return t_s, t_c, t_t
 
     def get_dyct(self, i, c, t):
