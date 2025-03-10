@@ -2137,6 +2137,7 @@ class ShapeSearch_MM(Dataset):
                  n_iter: int = 3,  # number of iterations
                  noise: float = 0.25,  # noise level
                  directory: str = r"./data",  # directory of shapes
+                 hard: bool = False,
                  ):
         
         super().__init__()
@@ -2179,6 +2180,8 @@ class ShapeSearch_MM(Dataset):
                 t_c = torch.randint(1, self.n_colors, (1, ))
             else:
                 t_t = torch.randint(1, self.n_textures, (1, ))
+        elif self.hard and not self.train:
+            t_s, t_c, t_t = 0, 0, 0
         return t_s, t_c, t_t
 
     def build_valid_test(self):
@@ -2232,6 +2235,7 @@ class ShapeRecognition_MM(Dataset):
                  n_iter: int = 3,  # number of iterations
                  noise: float = 0.25,  # noise level
                  directory: str = r"./data",  # directory of shapes
+                 hard: bool = False,
                  ):
         super().__init__()
 
@@ -2245,6 +2249,7 @@ class ShapeRecognition_MM(Dataset):
         self.n_grid = n_grid
         self.n_iter = n_iter
         self.noise = noise
+        self.hard = hard
         self.n_shapes = len(self.shapes)
         self.n_colors = len(self.colors)
         self.n_textures = len(self.textures)
