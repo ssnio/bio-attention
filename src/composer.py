@@ -42,6 +42,21 @@ def gaussian_line(w: int, m: int, s: int) -> torch.Tensor:
     y = torch.exp(-(x - m)**2 / s)
     return x, y
 
+def blur_edges(h: int, w: int, nh: int, nw: int, s: int) -> torch.Tensor:
+    xh = torch.ones(h)
+    dh = h//nh
+    for i in range(0, nh+1):
+        _, z = gaussian_line(h, i * dh, s)
+        xh *= (1.0 - z)
+    hh = xh.unsqueeze(0).repeat(w, 1).t()
+    xw = torch.ones(w)
+    dw = w//nw
+    for i in range(0, nw+1):
+        _, z = gaussian_line(w, i * dw, s)
+        xw *= (1.0 - z)
+    ww = xw.unsqueeze(0).repeat(h, 1)
+    return hh * ww
+
 def do_n_it(x: Union[torch.Tensor, int], n: int):
     if isinstance(x, torch.Tensor):
         return x.unsqueeze(0).expand(n, -1, -1, -1)
