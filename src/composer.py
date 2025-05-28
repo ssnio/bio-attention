@@ -30,6 +30,13 @@ def natural_noise(h, w):
             torch.normal(0.406, 0.225, (1, h, w))),
         dim=0)
 
+def gaussian_patch(h: int, w: int, s: float) -> torch.Tensor:
+    x = torch.arange(-w // 2 + 1, w // 2 + 1)
+    y = torch.arange(-h // 2 + 1, h // 2 + 1)
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
+    zz = torch.exp(-0.5 * (xx ** 2 + yy ** 2) / s ** 2)
+    return zz
+
 def do_n_it(x: Union[torch.Tensor, int], n: int):
     if isinstance(x, torch.Tensor):
         return x.unsqueeze(0).expand(n, -1, -1, -1)
