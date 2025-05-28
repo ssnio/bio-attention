@@ -38,7 +38,8 @@ class AttentionTrain:
                  logger: Logger, 
                  results_folder: str,
                  max_grad_norm: float = 10.0,
-                 save_intermediate: bool = False):
+                 save_intermediate: bool = False,
+                 time_it: bool = False):
         self.model = model
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -46,6 +47,7 @@ class AttentionTrain:
         self.logger = logger
         self.results_folder = results_folder
         self.save_intermediate = save_intermediate
+        self.time_it = time_it
         self.k_tasks = list(tasks.keys())
         self.n_k_tasks = len(self.k_tasks)
         if self.model.n_tasks > 1:
@@ -61,12 +63,21 @@ class AttentionTrain:
         self.loss_records = list([[], [], []] for _ in range(self.n_k_tasks))
         self.valid_records = list([[], [], [], [], []] for _ in range(self.n_k_tasks))
         self.train_records = list([[], [], [], [], []] for _ in range(self.n_k_tasks))
+        self.train_mod_records = None
+        self.valid_mod_records = None
+        for k in self.k_tasks:
+            if self.tasks[k].get("m_slice", None) is not None:
+                self.train_mod_records = list([[], []] for _ in range(len(self.tasks[k]["m_slice"])))
+                self.valid_mod_records = list([] for _ in range(len(self.tasks[k]["m_slice"])))
+                break
 
         self.grad_records = []
         self.max_grad_norm = max_grad_norm
+        self.end_softness = -1.0
+        self.confusion_matrix = torch.zeros(2, self.model.n_classes, self.model.n_classes)
+        self.do_confusion = False
 
-
-    def train(self, n_epochs: int, device, verbose: bool = False, mask_mp: float = 0.0):
+    def train(self, n_epochs: int, device, verbose: bool = False, mask_mp: float = 0.0, slow_soft: bool = False, sequential: bool = False):
         """
         One batch at a time by One training
         """
@@ -74,27 +85,52 @@ class AttentionTrain:
         self.model.to(device)
         self.model.train()
         for epoch in range(n_epochs):
+            self.model.train()
+            self.logger.info("training...")
             epoch_t = time.time()
+            cpu_time, gpu_time = list(0.0 for _ in range(self.n_k_tasks)), list(0.0 for _ in range(self.n_k_tasks))
             n_ior = self.set_ior() if "IOR" in self.tasks else 0
             train_loaders = [iter(self.tasks[k]["dataloaders"][0]) for k in self.k_tasks]
             for i in range(self.n_batches):
                 for j, k in enumerate(self.k_tasks):
                     class_weights = self.tasks[k].get("class_weights", None)
+                    m_slices = self.tasks[k].get("m_slice", None)
                     class_weights = None if class_weights is None else class_weights.to(device)
                     loss_w, loss_s = self.tasks[k]["loss_w"], self.tasks[k]["loss_s"]
-                    if k == "IOR":
+                    if "IOR" in k:
+                        gpu_time_start = 0.0
                         loss_1, loss_2, loss_3 = self.train_ior(n_ior, train_loaders[j], device)
                     else:
                         has_prompt = self.tasks[k].get("has_prompt", False)
                         task_id = self.tasks[k]["key"]
+                        cpu_time_start = time.time() if self.time_it else 0.0
                         x, y, m, _, hy = next(train_loaders[j])
                         x, y, m, hy = x.to(device), y.to(device), m.to(device), hy.to(device)
+                        cpu_time[j] += (time.time() - cpu_time_start) if self.time_it else 0.0
+                        gpu_time_start = time.time() if self.time_it else 0.0
                         p_m, p_y, _ = self.model(x, task_id, hy if has_prompt else None)
                         p_yy, _ = self.model.for_forward(x[:, -1])
 
-                        loss_1 = cross_entropy(p_y[:, :, loss_s[0]], y[:, loss_s[0]], class_weights) if y.ndim > 1 else torch.tensor([0.0]).to(device)
+                        loss_1 = torch.tensor([0.0]).to(device)
+                        loss_3 = torch.tensor([0.0]).to(device)
+                        if y.ndim > 1:
+                            if m_slices is None:
+                                if sequential:
+                                    seq = torch.arange(0, y.size(1))[loss_s[0]]
+                                    for s in seq:
+                                        loss_1 = loss_1 + ((s + 1.0)/len(seq)) * cross_entropy(p_y[:, :, s], y[:, s], class_weights)
+                                else:
+                                    loss_1 = cross_entropy(p_y[:, :, loss_s[0]], y[:, loss_s[0]], class_weights) 
+                                loss_3 = cross_entropy(p_yy, y[:, -1], class_weights)
+                            else:
+                                for s, mod_s in enumerate(m_slices):
+                                    loss_1_m = cross_entropy(p_y[:, mod_s, loss_s[0]], y[:, loss_s[0], s])
+                                    loss_3_m = cross_entropy(p_yy[:, mod_s], y[:, -1, s])
+                                    self.train_mod_records[s][0].append(loss_1_m.item() + 1e-6)
+                                    self.train_mod_records[s][1].append(loss_3_m.item() + 1e-6)
+                                    loss_1 = loss_1 + loss_1_m
+                                    loss_3 = loss_3 + loss_3_m
                         loss_2 = mse_loss(p_m[:, loss_s[1]], m[:, loss_s[1]]) if m.ndim > 1 else torch.tensor([0.0]).to(device)
-                        loss_3 = cross_entropy(p_yy, y[:, -1], class_weights) if y.ndim > 1 else torch.tensor([0.0]).to(device)
 
                     # mask loss (minimize the area of attention)
                     loss = (mask_mp * (((p_m[:, -1] + 1.0)/2.0).mean())) if mask_mp > 0.0 else 0.0
@@ -117,24 +153,126 @@ class AttentionTrain:
                     self.grad_records.append(get_grad_norms(self.model))
                     clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     self.optimizer.step()
+                    if isinstance(self.scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                        self.scheduler.step()
                     self.optimizer.zero_grad(set_to_none=True)
+                    gpu_time[j] += (time.time() - gpu_time_start) if self.time_it else 0.0
+            for td in train_loaders:
+                if hasattr(td, "_shutdown_workers"):
+                    td._shutdown_workers()
+                    # self.logger.warning("td._shutdown_workers()...")
+                # del td
             # save the model and optimizer
             if self.save_intermediate:
-                torch.save(self.model.state_dict(), os.path.join(self.results_folder, f"model_{epoch}_" + ".pth"))
-                torch.save(self.optimizer.state_dict(), os.path.join(self.results_folder, f"optimizer_{epoch}_" + ".pth"))
-            # update the scheduler
-            self.scheduler.step()
+                self.model.save_task_iter_batch() if hasattr(self.model, "save_task_iter_batch") else None
+                torch.save(self.model.state_dict(), os.path.join(self.results_folder, f"model_" + ".pth"))
+                torch.save(self.optimizer.state_dict(), os.path.join(self.results_folder, f"optimizer_" + ".pth"))
 
             # log and plot
             self.logger.info(f"Epoch {epoch+1}/{n_epochs} ({time.time() - epoch_t:.2f}s):")
             for j, k in enumerate(self.k_tasks):
                 self.logger.info(f"  Task {k}:")
-                self.logger.info(f"    Loss {0}: {sum(self.loss_records[j][0][-self.n_batches:])/self.n_batches:.6f}"
-                                    f"    Loss {1}: {sum(self.loss_records[j][1][-self.n_batches:])/self.n_batches:.6f}"
-                                    f"    Loss {2}: {sum(self.loss_records[j][2][-self.n_batches:])/self.n_batches:.6f}")
+                self.logger.info(f"    Loss {0}: {sum(self.loss_records[j][0][-self.n_batches:])/self.n_batches:.3f}"
+                                    f"    Loss {1}: {sum(self.loss_records[j][1][-self.n_batches:])/self.n_batches:.3f}"
+                                    f"    Loss {2}: {sum(self.loss_records[j][2][-self.n_batches:])/self.n_batches:.3f}")
+                if self.time_it:
+                    self.logger.info(f"    For {self.n_batches} batches:")
+                    self.logger.info(f"      CPU Time: {cpu_time[j]:.1f}    GPU Time: {gpu_time[j]:.1f}")
             if verbose or (epoch+1 in list(range(0, n_epochs+1, 4)) or epoch==0):
                 plot_all(10, self.model, self.tasks, self.results_folder, f"_ep_{epoch+1}", device, self.logger, False)
             self.eval(device, track=True)
+            
+            # update the scheduler
+            if not isinstance(self.scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(self.valid_records[0][1][-1])  # task 0, CE-e, last eval
+                else:
+                    self.scheduler.step()
+            self.logger.info(f"lr: {self.scheduler.get_last_lr()}")
+            # self.momentum_step(n_epochs, epoch)
+            # self.report_progress()
+            if slow_soft:
+                self.softness_step(n_epochs, epoch)
+
+        self.undo_ior()
+        self.model.eval()
+
+    def train_ffor(self, n_epochs: int, device, verbose: bool = False):
+        """
+        One batch at a time by One training
+        """
+        self.logger.info("training FFOR all, one batch at a time...")
+        self.model.to(device)
+        for epoch in range(n_epochs):
+            self.model.train()
+            self.logger.info("training...")
+            epoch_t = time.time()
+            cpu_time, gpu_time = list(0.0 for _ in range(self.n_k_tasks)), list(0.0 for _ in range(self.n_k_tasks))
+            train_loaders = [iter(self.tasks[k]["dataloaders"][0]) for k in self.k_tasks]
+            for i in range(self.n_batches):
+                for j, k in enumerate(self.k_tasks):
+                    m_slices = self.tasks[k].get("m_slice", None)
+                    class_weights = self.tasks[k].get("class_weights", None)
+                    class_weights = None if class_weights is None else class_weights.to(device)
+                    cpu_time_start = time.time() if self.time_it else 0.0
+                    x, y, _, _, _ = next(train_loaders[j])
+                    x, y = x.to(device), y.to(device)
+                    cpu_time[j] += (time.time() - cpu_time_start) if self.time_it else 0.0
+                    gpu_time_start = time.time() if self.time_it else 0.0
+                    self.model.initiate_forward(x.size(0))
+                    p_yy, _ = self.model.for_forward(x[:, 0])
+                    if m_slices is None:
+                        loss = cross_entropy(p_yy, y[:, 0], class_weights)
+                    else:
+                        loss = torch.tensor([0.0]).to(device)
+                        for s, mod_s in enumerate(m_slices):
+                            loss_m = cross_entropy(p_yy[:, mod_s], y[:, 0, s])
+                            self.train_mod_records[s][0].append(1e-6)
+                            self.train_mod_records[s][1].append(loss_m.item() + 1e-6)
+                            loss = loss + loss_m
+
+                    self.loss_records[j][0].append(1e-6)
+                    self.loss_records[j][1].append(1e-6)
+                    self.loss_records[j][2].append(loss.item() + 1e-6)
+
+                    # # grad backprop, clip and update
+                    self.optimizer.zero_grad(set_to_none=True)
+                    loss.backward()
+                    self.grad_records.append(get_grad_norms(self.model))
+                    clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    self.optimizer.step()
+                    if isinstance(self.scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                        self.scheduler.step()
+                    self.optimizer.zero_grad(set_to_none=True)
+                    gpu_time[j] += (time.time() - gpu_time_start) if self.time_it else 0.0
+
+            # save the model and optimizer
+            if self.save_intermediate:
+                self.model.save_task_iter_batch() if hasattr(self.model, "save_task_iter_batch") else None
+                torch.save(self.model.state_dict(), os.path.join(self.results_folder, f"model_" + ".pth"))
+                torch.save(self.optimizer.state_dict(), os.path.join(self.results_folder, f"optimizer_" + ".pth"))
+
+            # log and plot
+            self.logger.info(f"Epoch {epoch+1}/{n_epochs} ({time.time() - epoch_t:.2f}s):")
+            for j, k in enumerate(self.k_tasks):
+                self.logger.info(f"  Task {k}:")
+                self.logger.info(f"    Loss {0}: {sum(self.loss_records[j][0][-self.n_batches:])/self.n_batches:.3f}"
+                                 f"    Loss {1}: {sum(self.loss_records[j][1][-self.n_batches:])/self.n_batches:.3f}"
+                                 f"    Loss {2}: {sum(self.loss_records[j][2][-self.n_batches:])/self.n_batches:.3f}")
+                if self.time_it:
+                    self.logger.info(f"    For {self.n_batches} batches:")
+                    self.logger.info(f"      CPU Time: {cpu_time[j]:.1f}    GPU Time: {gpu_time[j]:.1f}")
+            if verbose or (epoch+1 in list(range(0, n_epochs+1, 4)) or epoch==0):
+                plot_all(10, self.model, self.tasks, self.results_folder, f"_ep_{epoch+1}", device, self.logger, False)
+            self.eval_ffor(device, track=True)
+            
+            # update the scheduler
+            if not isinstance(self.scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(self.valid_records[0][1][-1])  # task 0, CE-e, last eval
+                else:
+                    self.scheduler.step()
+            self.logger.info(f"lr: {self.scheduler.get_last_lr()}")
 
         self.undo_ior()
         self.model.eval()
@@ -187,13 +325,13 @@ class AttentionTrain:
             loss_2 = loss_2 + mse_loss(p_m[:, j], targets_masks[i])
         return loss_1, loss_2, loss_3
 
-    def eval(self, device, kind = "valid", track = False):
+    def eval(self, device, kind = "valid", track = False, retrack = False):
         if kind == "train":
             if hasattr(self, "train_loaders"):
                 _loader = self.train_loaders
-                self.logger.info("train-eval...")
             else:
-                return
+                _loader = [self.tasks[k]["dataloaders"][0] for k in self.k_tasks]
+            self.logger.info("train-eval...")
         elif kind == "test":
             _loader = self.test_loaders
             self.logger.info("testing...")
@@ -201,29 +339,51 @@ class AttentionTrain:
             _loader = self.valid_loaders
             self.logger.info("validating...")
         eval_scores = list([0.0, 0.0, 0.0, 0.0, 0] for _ in range(self.n_k_tasks))
-        
+        cpu_time, gpu_time = list(0.0 for _ in range(self.n_k_tasks)), list(0.0 for _ in range(self.n_k_tasks))
+
         self.model.to(device)
         self.model.eval()
         with torch.no_grad():
             for j, k in enumerate(self.k_tasks):
                 loss_w, loss_s = self.tasks[k]["loss_w"], self.tasks[k]["loss_s"]
-                if k == "IOR":
+                m_slices = self.tasks[k].get("m_slice", None)
+                mode_scores = list([0.0, 0.0, 0] for _ in range(len(self.valid_mod_records))) if self.valid_mod_records is not None else None
+                if "IOR" in k:
                     eval_scores[j] = self.eval_ior(_loader[j], device)
                 else:
                     has_prompt = self.tasks[k].get("has_prompt", False)
                     task_id = self.tasks[k]["key"]
                     class_weights = self.tasks[k].get("class_weights", None)
                     class_weights = None if class_weights is None else class_weights.to(device)
+                    cpu_time_start = time.time() if self.time_it else 0.0
                     for x, y, m, _, hy in _loader[j]:
                         x, y, m, hy = x.to(device), y.to(device), m.to(device), hy.to(device)
+                        gpu_time_start = time.time() if self.time_it else 0.0
                         p_m, p_y, a_ = self.model(x, task_id, hy if has_prompt else None)
                         p_yy, aa_ = self.model.for_forward(x[:, -1])
-                        prediction = p_yy.argmax(dim=1, keepdim=True)
-                        eval_scores[j][0] += cross_entropy(p_y[:, :, loss_s[0]], y[:, loss_s[0]], class_weights, reduction='sum').item() if y.ndim > 1 else 0.0
-                        eval_scores[j][1] += cross_entropy(p_yy, y[:, -1], class_weights, reduction='sum').item() if y.ndim > 1 else 0.0
+                        
+                        if y.ndim > 1:
+                            if m_slices is None:
+                                prediction = p_yy.argmax(dim=1, keepdim=True)
+                                eval_scores[j][0] += cross_entropy(p_y[:, :, loss_s[0]], y[:, loss_s[0]], class_weights, reduction='sum').item()
+                                eval_scores[j][1] += cross_entropy(p_yy, y[:, -1], class_weights, reduction='sum').item()
+                                eval_scores[j][4] += prediction.eq(y[:, -1].view_as(prediction)).sum().item()
+                            else:
+                                for s, mod_s in enumerate(m_slices):
+                                    prediction = p_yy[:, mod_s].argmax(dim=1, keepdim=True)
+                                    a = cross_entropy(p_y[:, mod_s, loss_s[0]], y[:, loss_s[0], s], reduction='sum').item()
+                                    b = cross_entropy(p_yy[:, mod_s], y[:, -1, s], reduction='sum').item()
+                                    c = prediction.eq(y[:, -1, s].view_as(prediction)).sum().item()
+                                    eval_scores[j][0] += a
+                                    eval_scores[j][1] += b
+                                    eval_scores[j][4] += c
+                                    mode_scores[s][0] += a
+                                    mode_scores[s][1] += b
+                                    mode_scores[s][2] += c
                         eval_scores[j][2] += pixel_error(p_m[:, loss_s[1]], m[:, loss_s[1]]).item() * x.size(0) if m.ndim > 1 else 0.0
                         eval_scores[j][3] += normed_acc(p_m[:, loss_s[1]], m[:, loss_s[1]]).item() * x.size(0) if m.ndim > 1 else 0.0
-                        eval_scores[j][4] += prediction.eq(y[:, -1].view_as(prediction)).sum().item() if y.ndim > 1 else 0
+                        gpu_time[j] += (time.time() - gpu_time_start) if self.time_it else 0.0
+                    cpu_time[j] = (time.time() - cpu_time_start - gpu_time[j]) if self.time_it else 0.0
 
                 self.logger.info(f"  Task {k}:")
                 n_samples = _loader[j].dataset.__len__()
@@ -231,11 +391,19 @@ class AttentionTrain:
                 eval_scores[j][1] /= n_samples
                 eval_scores[j][2] /= n_samples
                 eval_scores[j][3] /= n_samples
-                self.logger.info(f"    CEi Loss: {eval_scores[j][0]:.6f}"
-                                 f"    CEe Loss: {eval_scores[j][1]:.6f}"
-                                 f"    Pix Err: {eval_scores[j][2]:.6f}"
-                                 f"    Att Acc: {eval_scores[j][3]:.6f}"
+                if m_slices is not None and mode_scores[0][0] > 0.0:
+                    for s, _ in enumerate(m_slices):
+                        mode_scores[s][0] /= n_samples
+                        mode_scores[s][1] /= n_samples
+                        mode_scores[s][2] /= n_samples
+                self.logger.info(f"    CEi Loss: {eval_scores[j][0]:.3f}"
+                                 f"    CEe Loss: {eval_scores[j][1]:.3f}"
+                                 f"    Pix Err: {eval_scores[j][2]:.3f}"
+                                 f"    Att Acc: {eval_scores[j][3]:.3f}"
                                  f"    Cls Acc: {eval_scores[j][4]}/{n_samples}")
+                if self.time_it:
+                    self.logger.info(f"    For {len(_loader[j])} batches:")
+                    self.logger.info(f"      CPU Time: {cpu_time[j]:.1f}    GPU Time: {gpu_time[j]:.1f}")
                 if track and kind == "valid":
                     self.valid_records[j][0].append(eval_scores[j][0])
                     self.valid_records[j][1].append(eval_scores[j][1])
@@ -248,8 +416,122 @@ class AttentionTrain:
                     self.train_records[j][2].append(eval_scores[j][2])
                     self.train_records[j][3].append(eval_scores[j][3])
                     self.train_records[j][4].append(eval_scores[j][4]/n_samples)
-        
-        
+                eval_scores[j][4] /= n_samples
+
+                if m_slices is not None and mode_scores[0][0] > 0.0:
+                    for s, _ in enumerate(m_slices):
+                        self.logger.info(f"    Modality: {s}"
+                                         f"      CEi Loss: {mode_scores[s][0]:.3f}"
+                                         f"      CEe Loss: {mode_scores[s][1]:.3f}"
+                                         f"      Cls Acc:  {mode_scores[s][2]:.3f}")
+                        if track:
+                            self.valid_mod_records[s].append(mode_scores[s])
+                # if track and kind == "valid" and m_slices is not None and mode_scores[0][0] > 0.0:
+                #     self.valid_mod_records[s].append(mode_scores)
+            if retrack:
+                return eval_scores
+
+    def eval_ffor(self, device, kind = "valid", track = False, retrack = False):
+        if kind == "train":
+            if hasattr(self, "train_loaders"):
+                _loader = self.train_loaders
+                self.logger.info("train-eval...")
+            else:
+                _loader = [self.tasks[k]["dataloaders"][0] for k in self.k_tasks]
+            self.logger.info("train-eval...")
+                # return
+        elif kind == "test":
+            _loader = self.test_loaders
+            self.logger.info("testing...")
+        else :
+            _loader = self.valid_loaders
+            self.logger.info("validating...")
+        eval_scores = list([0.0, 0.0, 0.0, 0.0, 0] for _ in range(self.n_k_tasks))
+        cpu_time, gpu_time = list(0.0 for _ in range(self.n_k_tasks)), list(0.0 for _ in range(self.n_k_tasks))
+
+        self.model.to(device)
+        self.model.eval()
+
+        with torch.no_grad():
+            for j, k in enumerate(self.k_tasks):
+                mode_scores = list([0.0, 0.0, 0] for _ in range(len(self.valid_mod_records))) if self.valid_mod_records is not None else None
+                class_weights = self.tasks[k].get("class_weights", None)
+                class_weights = None if class_weights is None else class_weights.to(device)
+                m_slices = self.tasks[k].get("m_slice", None)
+                cpu_time_start = time.time() if self.time_it else 0.0
+                for x, y, _, _, _ in _loader[j]:
+                    x, y = x.to(device), y.to(device)
+                    gpu_time_start = time.time() if self.time_it else 0.0
+                    self.model.initiate_forward(x.size(0))
+                    p_yy, _ = self.model.for_forward(x[:, 0])
+                    
+                    if m_slices is None:
+                        prediction = p_yy.argmax(dim=1, keepdim=True)
+                        eval_scores[j][0] += 0.0
+                        eval_scores[j][1] += cross_entropy(p_yy, y[:, 0], class_weights, reduction='sum').item()
+                        eval_scores[j][4] += prediction.eq(y[:, 0].view_as(prediction)).sum().item()
+                    else:
+                        for s, mod_s in enumerate(m_slices):
+                            prediction = p_yy[:, mod_s].argmax(dim=1, keepdim=True)
+                            a = 0.0
+                            b = cross_entropy(p_yy[:, mod_s], y[:, 0, s], reduction='sum').item()
+                            c = prediction.eq(y[:, 0, s].view_as(prediction)).sum().item()
+                            eval_scores[j][0] += a
+                            eval_scores[j][1] += b
+                            eval_scores[j][4] += c
+                            mode_scores[s][0] += a
+                            mode_scores[s][1] += b
+                            mode_scores[s][2] += c
+                    eval_scores[j][2] += 0.0
+                    eval_scores[j][3] += 0.0
+                    gpu_time[j] += (time.time() - gpu_time_start) if self.time_it else 0.0
+                cpu_time[j] = (time.time() - cpu_time_start - gpu_time[j]) if self.time_it else 0.0
+
+                self.logger.info(f"  Task {k}:")
+                n_samples = _loader[j].dataset.__len__()
+                eval_scores[j][0] /= n_samples
+                eval_scores[j][1] /= n_samples
+                eval_scores[j][2] /= n_samples
+                eval_scores[j][3] /= n_samples
+                if m_slices is not None and mode_scores[-1][-1] > 0.0:
+                    for s, _ in enumerate(m_slices):
+                        mode_scores[s][0] /= n_samples
+                        mode_scores[s][1] /= n_samples
+                        mode_scores[s][2] /= n_samples
+                self.logger.info(f"    CEi Loss: {eval_scores[j][0]:.3f}"
+                                 f"    CEe Loss: {eval_scores[j][1]:.3f}"
+                                 f"    Pix Err: {eval_scores[j][2]:.3f}"
+                                 f"    Att Acc: {eval_scores[j][3]:.3f}"
+                                 f"    Cls Acc: {eval_scores[j][4]}/{n_samples}")
+                if self.time_it:
+                    self.logger.info(f"    For {len(_loader[j])} batches:")
+                    self.logger.info(f"      CPU Time: {cpu_time[j]:.1f}    GPU Time: {gpu_time[j]:.1f}")
+                if track and kind == "valid":
+                    self.valid_records[j][0].append(eval_scores[j][0])
+                    self.valid_records[j][1].append(eval_scores[j][1])
+                    self.valid_records[j][2].append(eval_scores[j][2])
+                    self.valid_records[j][3].append(eval_scores[j][3])
+                    self.valid_records[j][4].append(eval_scores[j][4]/n_samples)
+                elif track and kind == "train":
+                    self.train_records[j][0].append(eval_scores[j][0])
+                    self.train_records[j][1].append(eval_scores[j][1])
+                    self.train_records[j][2].append(eval_scores[j][2])
+                    self.train_records[j][3].append(eval_scores[j][3])
+                    self.train_records[j][4].append(eval_scores[j][4]/n_samples)
+                eval_scores[j][4] /= n_samples
+
+                if m_slices is not None and mode_scores[-1][-1] > 0.0:
+                    for s, _ in enumerate(m_slices):
+                        self.logger.info(f"    Modality: {s}"
+                                         f"      CEi Loss: {mode_scores[s][0]:.3f}"
+                                         f"      CEe Loss: {mode_scores[s][1]:.3f}"
+                                         f"      Cls Acc:  {mode_scores[s][2]:.3f}")
+                        if track:
+                            self.valid_mod_records[s].append(mode_scores[s])
+
+            if retrack:
+                return eval_scores
+
     def eval_ior(self, dloader_, device_):
         eval_scores_ = [0.0, 0.0, 0.0, 0.0, 0]
         task_id = self.tasks["IOR"]["key"]
@@ -293,7 +575,7 @@ class AttentionTrain:
         self.model.to(device)
         self.model.eval()
         with torch.no_grad():
-            for j, k in (enumerate(self.k_tasks) if do_tasks is None else do_tasks):
+            for j, k in enumerate(self.k_tasks if do_tasks is None else do_tasks):
                 if k == "IOR":
                     continue
                 else:
@@ -319,10 +601,17 @@ class AttentionTrain:
                     self.logger.info(f"  Task {k}:")
                     n_samples = _loader[j].dataset.__len__()
                     for i in range(n):
-                        self.logger.info(f"    CEi Loss: {eval_scores[i][0]/n_samples:.6f}"
-                                         f"    Pix Err: {eval_scores[i][1]/n_samples:.6f}"
-                                         f"    Att Acc: {eval_scores[i][2]/n_samples:.6f}"
+                        self.logger.info(f"    CEi Loss: {eval_scores[i][0]/n_samples:.3f}"
+                                         f"    Pix Err: {eval_scores[i][1]/n_samples:.3f}"
+                                         f"    Att Acc: {eval_scores[i][2]/n_samples:.3f}"
                                          f"    Cls Acc: {eval_scores[i][3]}/{n_samples}")
+
+    def confuse(self, classes: torch.Tensor, preds: torch.Tensor, kind: int = 0):
+        if self.confusion_matrix is None:
+            self.confusion_matrix = torch.zeros(2, self.model.n_classes, self.model.n_classes)
+        with torch.no_grad(): # code from @ptrblck in the pytorch forum
+            for t, p in zip(classes.view(-1), preds.view(-1)):
+                self.confusion_matrix[kind, t.long(), p.long()] += 1
 
 
 def cls_train_for(
@@ -378,7 +667,6 @@ def cls_eval_for(
     
     ce_loss = 0.0
     accuracy = 0
-
     model.to(device)
     model.train()
     task_content = next(iter(tasks.values()))
