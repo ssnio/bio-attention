@@ -178,6 +178,25 @@ class FixPoints:
         return fix_points
 
 
+class StringDigits(Dataset):
+    def __init__(self, mnist_ds: Dataset):
+        self.ds = mnist_ds
+        self.h, self.w = 14, 140
+        self.transform = transforms.Resize((self.h, self.h), antialias=False)
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        composite = torch.zeros(3, self.h, self.w)
+        for i in range(self.w//self.h):
+            idx = torch.randint(0, len(self.ds), (1,)).item()
+            x, _ = self.ds[idx]
+            x = self.transform(x)
+            composite[:, :, i*self.h:(i+1)*self.h] = x 
+        return composite
+
+
 class IOR_DS(Dataset):
     def __init__(self,
                  mnist_dataset: Dataset,
