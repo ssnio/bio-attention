@@ -228,7 +228,6 @@ class AttentionModel(torch.nn.Module):
         self.deconv_blocks = torch.nn.ModuleList()
         self.embed_blocks_a = torch.nn.ModuleList() if self.task_weight else None
         self.embed_blocks_b = torch.nn.ModuleList() if self.task_bias else None
-        self.bridges = torch.nn.ModuleList()
         for i in range(self.n_convs):
             self.conv_blocks.append(ConvBlock(self.channels[i], 
                                               self.channels[i+1], 
@@ -297,7 +296,7 @@ class AttentionModel(torch.nn.Module):
                                                   2 * self.channels[-i], 
                                                   self.channels[-i-1] if i < self.n_convs else 1,
                                                   3,
-                                                  self.strides[-i],
+                                                  1,
                                                   'same',
                                                   self.conv_bias[-i],
                                                   self.deconv_norms[-i],
@@ -359,6 +358,8 @@ class AttentionModel(torch.nn.Module):
         else:
             t, th = None, None
         if y is not None:
+            if y.size(2) < self.n_classes:
+                y = torch.nn.functional.pad(y, (0, self.n_classes - y.size(2)), mode='constant', value=0.0).to(device)
             y = y.permute(1, 0, 2).contiguous()
 
         # initialization
@@ -468,6 +469,8 @@ class AttentionModel(torch.nn.Module):
             t, th = self.prepare_task(t, batch_size, device)
         else:
             t, th = None, None
+        if y is not None and y.size(1) < self.n_classes:
+            y = torch.nn.functional.pad(y, (0, self.n_classes - y.size(1)), mode='constant', value=0.0).to(device)
         h = normalize(x, self.norm_mean, self.norm_std) if self.normalize else x
 
         # pre-allocation
