@@ -915,6 +915,7 @@ class COCOAnimals(Dataset):
                  tokens: torch.Tensor,
                  animals: bool = True,
                  min_area: float = 1.0/64.0,
+                 ignore_class_weight: bool = False,
                  ):
         super().__init__()
         in_dims = in_dims if len(in_dims) == 2 else in_dims[1:]
@@ -923,6 +924,7 @@ class COCOAnimals(Dataset):
         self.kind = kind
         self.tokens = tokens
         self.min_area = min_area
+        self.ignore_class_weight = ignore_class_weight
         self.directory = os.path.join(directory, "coco")
         self.file_type = "val2017" if kind == 2 else "train2017"
         self.coco = COCO(os.path.join(self.directory, f"annotations/instances_{self.file_type}.json"))
@@ -1011,7 +1013,7 @@ class COCOAnimals(Dataset):
                         self.class_weights[label_] += 1
                         i += 1
 
-            self._get_class_weights()
+            self._get_class_weights() if not self.ignore_class_weight else None
         self._len_ = max(len(self.triplets), self._len_)
         return torch.tensor(self.triplets)
 
