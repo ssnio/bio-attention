@@ -23,6 +23,13 @@ def make_frame(h: int, w: int, t: int) -> torch.Tensor:
     x[:, :, -t:] = 1.0
     return x
 
+def natural_noise(h, w):
+    return torch.cat((
+            torch.normal(0.485, 0.229, (1, h, w)),
+            torch.normal(0.456, 0.224, (1, h, w)),
+            torch.normal(0.406, 0.225, (1, h, w))),
+        dim=0)
+
 def do_n_it(x: Union[torch.Tensor, int], n: int):
     if isinstance(x, torch.Tensor):
         return x.unsqueeze(0).expand(n, -1, -1, -1)
