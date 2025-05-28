@@ -152,8 +152,9 @@ def routine_01(composites: torch.Tensor, masks: torch.Tensor, noise: float = 0.0
 class FixPoints:
     """Creates a fix point for a given object (digit) with size k x k
     such that the fix point is contiguous with the object."""
-    def __init__(self, k: int = 3):
+    def __init__(self, k: int = 3, rand: bool = False):
         self.k = k
+        self.rand = rand
         self.p = (k // 2) + (k % 1)
         self.a = k * k # area of the fix points
         self.ck = torch.ones((1, 1, k, k))
@@ -174,7 +175,10 @@ class FixPoints:
     
     def fix_points(self, x: torch.tensor):
         fix_points = torch.zeros_like(x)
-        i, j = self.get_rand_fix_point(x)
+        if self.rand:
+            i, j = torch.randint(self.k, x.size(1) - self.k, (1,)), torch.randint(self.k, x.size(2) - self.k, (1,))
+        else:
+            i, j = self.get_rand_fix_point(x)
         fix_points[:, i-self.p:i+self.p, j-self.p:j+self.p] = 1.0
         return fix_points
 
