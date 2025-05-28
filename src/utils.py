@@ -28,10 +28,18 @@ def plot_one(n, model_, dataloader_, key_, has_prompt_, directory, logger, prefi
         model_.to(device)
         composites = composites.to(device)
         hot_labels = hot_labels.to(device) if has_prompt_ else None
-        p_masks, *_ = model_(composites, key_, hot_labels if has_prompt_ else None)
+        p_masks, p_y, a_ = model_(composites, key_, hot_labels if has_prompt_ else None)
+        p_yy, aa_ = model_.for_forward(composites[:, -1])
         composites = composites.cpu()
         p_masks = p_masks.cpu()
 
+    # logger.info(f"task: {prefix} {suffix}...")
+    # logger.info((torch.softmax(p_y[:n, :, -1].squeeze(), 1)*100).int())
+    # logger.info((torch.softmax(p_yy[:n].squeeze(), 1)*100).int())
+    # if prefix in ("Tracking", "IOR"):
+    #     for i in range(n):
+    #         for j in range(p_y.size(2)):
+    #             logger.info(f"  {i} {j}: {(torch.softmax(p_y[i, :, j].squeeze(), 0)*100).int()}")
     im_size = 2
     n_iter = composites.size(1)
     n = min(n, composites.size(0))
@@ -133,6 +141,8 @@ def build_loaders(datasets: Dataset, batch_size: int, num_workers: int = 0, pin_
         batch_size=batch_size, 
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=True,
+        prefetch_factor=2,
         shuffle=True)
     valid_loader = DataLoader(
         val_ds, 
