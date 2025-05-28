@@ -431,6 +431,7 @@ class Recognition_DS(Dataset):
                  static: bool = False,  # whether the background and foreground are static
                  background: bool = True,  # whether to use background or not
                  noise: float = 0.25,  # noise scale
+                 hard: bool = False,
                  ):
         
         super().__init__()
@@ -441,13 +442,16 @@ class Recognition_DS(Dataset):
         self.static = static
         self.background = background
         self.noise = noise
+        self.hard = hard
         self.pad = 34
         self.c, h, w = self.dataset[0][0].shape
         self.h, self.w = self.pad + h + self.pad, self.pad + w + self.pad
         self.transform = transforms.Compose([
             transforms.Pad(self.pad),
             transforms.RandomAffine(degrees=(-15, 15), translate=(0.3, 0.3), scale=(1.3, 1.5))])
-        
+        self.occ_ratio = 0.0
+        self.n = 0
+
     def make_foreground(self):
         window_shape = (self.h, self.w + self.stride * self.n_iter)
         pink_fore = pink(window_shape, 2.5, 0.6, torch.cos).unsqueeze(0)
@@ -482,8 +486,9 @@ class Recognition_DS(Dataset):
         digit_color = torch.rand(3, 1, 1)
         background_color = torch.rand(3, 1, 1)
         foreground_color = 1.0 - background_color
-        foreground_color /= (foreground_color.max() + 1e-6) * 2
-        background_color /= (background_color.max() + 1e-6) * 2
+        if not self.hard:
+            foreground_color /= (foreground_color.max() + 1e-6) * 2.0
+            background_color /= (background_color.max() + 1e-6) * 2.0
         digit_color /= (digit_color.max() + 1e-6)
         if self.background:
             background = self.make_background() * background_color
@@ -495,6 +500,8 @@ class Recognition_DS(Dataset):
         labels[:] = y
         masks[:] = x
         z = digit_color * x
+        self.occ_ratio += (1.0 - (x * (1.0 - foreground[:, :self.h, :self.w])).sum() / x.sum())
+        self.n += 1
 
         # background
         if self.static:
