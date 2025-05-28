@@ -13,6 +13,16 @@ from torch.nn.functional import one_hot, conv2d
 from PIL import Image as PILImage
 
 
+def make_frame(h: int, w: int, t: int) -> torch.Tensor:
+    """h: height, w: width, t: thickness
+    """
+    x = torch.zeros(1, h, w)
+    x[:, :t, :] = 1.0
+    x[:, -t:, :] = 1.0
+    x[:, :, :t] = 1.0
+    x[:, :, -t:] = 1.0
+    return x
+
 def do_n_it(x: Union[torch.Tensor, int], n: int):
     if isinstance(x, torch.Tensor):
         return x.unsqueeze(0).expand(n, -1, -1, -1)
