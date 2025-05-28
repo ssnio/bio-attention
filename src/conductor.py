@@ -401,3 +401,250 @@ def cls_eval_for(
     
     logger.info(f"\t CE-Loss: {ce_loss/n_bs:.4f}")
     logger.info(f"\t Acc: {accuracy/n_bs:.4f}")
+
+
+def mm_cls_train_for(
+    model: AttentionModel, 
+    tasks: dict,
+    optimizer: torch.optim.Adam, 
+    scheduler: torch.optim.lr_scheduler.LRScheduler, 
+    n_epochs: int,
+    device: torch.device,
+    logger: Logger,
+    max_grad_norm: float = 10.0,
+):
+    model.to(device)
+    model.train()
+    task_content = next(iter(tasks.values()))
+    train_dl, _, _ = task_content["dataloaders"]
+    n_bs = len(train_dl)
+    m_slice = task_content["m_slice"]
+    loss_w = task_content["loss_w"]
+    n_mods = len(m_slice)
+    loss_log = list([[] for _ in range(n_mods)])
+    eval_log = list([[] for _ in range(n_mods)])
+    for epoch in range(n_epochs):
+        epoch_t = time.time()
+        for x, y, *_ in train_dl:
+            x = x if x.ndim == 4 else x[:, -1].contiguous()
+            y = y if y.ndim == 1 else y[:, -1].contiguous()
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            model.initiate_forward(x.size(0))
+            p_y = model.simp_forward(x)
+            loss = 0.0
+            for i in range(n_mods):
+                temp = cross_entropy(p_y[:, m_slice[i]], y[:, i])
+                loss_log[i].append(temp.item() + 1e-6)
+                loss = loss + loss_w[i] * temp
+            loss.backward()
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+
+        logger.info(f"Epoch {epoch} in {time.time()-epoch_t:.2f} sec")
+        for i in range(n_mods):
+            logger.info(f"\t CE-Loss {i}: {sum(loss_log[i][-n_bs:])/n_bs:.4f}")
+        ev_ce_loss, ev_accuracy = mm_cls_eval_for(model, tasks, device, logger)
+        for i in range(n_mods):
+            eval_log[i].append((ev_ce_loss[i], ev_accuracy[i]))
+        model.train()
+    
+    model.eval()
+    return loss_log
+
+
+def mm_cls_eval_for(
+    model: AttentionModel, 
+    tasks: dict,
+    device: torch.device,
+    logger: Logger,
+    valid: bool = True,
+):
+    task_content = next(iter(tasks.values()))
+    this_dl = task_content["dataloaders"][1] if valid else task_content["dataloaders"][2]
+    n_bs = len(this_dl.dataset)
+    m_slice = task_content["m_slice"]
+    n_mods = len(m_slice)
+    ce_loss = list([0.0 for _ in range(n_mods)])
+    accuracy = list([0 for _ in range(n_mods)])
+
+    logger.info("Validating..." if valid else "Testing...")
+    model.to(device)
+    model.eval()
+    with torch.no_grad():
+        for x, y, _, _, _ in this_dl:
+            x = x if x.ndim == 4 else x[:, -1].contiguous()
+            y = y if y.ndim == 1 else y[:, -1].contiguous()
+            x, y = x.to(device), y.to(device)
+            p_y = model.simp_forward(x)
+            for i in range(n_mods):
+                ce_loss[i] += cross_entropy(p_y[:, m_slice[i]], y[:, i], reduction='sum').item()
+                accuracy[i] += (p_y[:, m_slice[i]].argmax(dim=1) == y[:, i]).sum().item()
+    for i in range(n_mods):
+        logger.info(f"\t Modality {i}:")
+        logger.info(f"\t\t CE-Loss {i}: {ce_loss[i]/n_bs:.4f}")
+        logger.info(f"\t\t Acc {i}: {accuracy[i]/n_bs:.4f}")
+    return ce_loss, accuracy
+
+
+def simp_cls_train(
+    model: AttentionModel, 
+    tasks: dict,
+    optimizer: torch.optim.Adam, 
+    scheduler: torch.optim.lr_scheduler.LRScheduler, 
+    n_epochs: int,
+    device: torch.device,
+    logger: Logger,
+    max_grad_norm: float = 10.0,
+    ):
+    logger.info("Training...")
+    loss_log, eval_log = [], [[], []]
+    model.to(device)
+    model.train()
+    task_content = next(iter(tasks.values()))
+    train_dl = task_content["dataloaders"][0]
+    n_bs = len(train_dl)
+    for epoch in range(n_epochs):
+        epoch_t = time.time()
+        for x, y, *_ in train_dl:
+            x = x if x.ndim == 4 else x[:, -1].contiguous()
+            y = y if y.ndim == 1 else y[:, -1].contiguous()
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            p_y = model(x)
+            loss = cross_entropy(p_y, y)
+            loss.backward()
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            loss_log.append(loss.item())
+        if scheduler is not None:
+            scheduler.step()
+
+        logger.info(f"Epoch {epoch} in {time.time()-epoch_t:.2f} sec")
+        logger.info(f"\t CE-Loss: {sum(loss_log[-n_bs:])/n_bs:.4f}")
+
+        val_ce, val_acc = simp_cls_eval(model, tasks, device, logger)
+        eval_log[0].append(val_ce)
+        eval_log[1].append(val_acc)
+        model.train()
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_ce)
+            else:
+                scheduler.step()
+            # logger.info(f"Opt-Scheduler new LR: {scheduler.get_last_lr()}")
+
+    model.eval()
+    return loss_log, eval_log
+
+
+def simp_cls_eval(
+    model: AttentionModel, 
+    tasks: dict,
+    device: torch.device,
+    logger: Logger,
+    valid: bool = True,
+):
+    
+    ce_loss = 0.0
+    accuracy = 0
+    task_content = next(iter(tasks.values()))
+    this_dl = task_content["dataloaders"][1] if valid else task_content["dataloaders"][2]
+    n_bs = len(this_dl.dataset)
+    logger.info("Validating..." if valid else "Testing...")
+    model.to(device)
+    model.eval()
+    with torch.no_grad():
+        for x, y, _, _, _ in this_dl:
+            x = x if x.ndim == 4 else x[:, -1].contiguous()
+            y = y if y.ndim == 1 else y[:, -1].contiguous()
+            x, y = x.to(device), y.to(device)
+            p_y = model(x)
+            ce_loss += cross_entropy(p_y, y, reduction='sum').item()
+            accuracy += (p_y.argmax(dim=1) == y).sum().item()
+    
+    logger.info(f"\t CE-Loss: {ce_loss/n_bs:.4f}")
+    logger.info(f"\t Acc: {accuracy/n_bs:.4f}")
+    return ce_loss/n_bs, accuracy/n_bs
+
+
+def mms_train(
+    model: AttentionModel, 
+    tasks: dict,
+    optimizer: torch.optim.Adam, 
+    scheduler: torch.optim.lr_scheduler.LRScheduler, 
+    n_epochs: int,
+    device: torch.device,
+    logger: Logger,
+    max_grad_norm: float = 10.0,
+    verbose: bool = False,
+    results_folder: str = None,
+):
+    task_name = "MMS"
+    loss_records, grad_records, valid_records = [], [], []
+    epoch_t = time.time()
+    train_dl = tasks[task_name]["dataloaders"][0]
+    loss_s = tasks[task_name]["loss_s"]
+    has_prompt = tasks[task_name].get("has_prompt", False)
+    assert has_prompt, "MMS task requires prompt!"
+    n_bs = len(train_dl)
+    model.to(device)
+    model.train()
+    for epoch in range(n_epochs):
+        for x, y, m, _, hy in train_dl:
+            x, y, m, hy = x.to(device), y.to(device), m.to(device), hy.to(device)
+            p_m, _, _ = model(x, None, hy)
+            loss = mse_loss(p_m[:, loss_s[1]], m[:, loss_s[1]])
+            loss_records.append(loss.item() + 1e-6)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            grad_records.append(get_grad_norms(model))
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+        # update the scheduler
+        scheduler.step()
+
+        # log and plot
+        logger.info(f"Epoch {epoch+1}/{n_epochs} ({time.time() - epoch_t:.2f}s):")
+        logger.info(f"    Loss: {sum(loss_records[-n_bs:])/n_bs:.6f}")
+        if (verbose or (epoch+1 in list(range(0, n_epochs+1, 4)) or epoch==0)) and results_folder is not None:
+            plot_all(10, model, tasks, results_folder, f"_ep_{epoch+1}", device, logger, False)
+        eval_scores = mms_eval(model, tasks, device, logger)
+        valid_records.append(eval_scores)
+        model.train()
+    model.eval()
+    return loss_records, grad_records, valid_records
+
+
+def mms_eval(
+    model: AttentionModel, 
+    tasks: dict,
+    device: torch.device,
+    logger: Logger,
+    valid: bool = True,
+):
+    task_name = "MMS"
+    eval_scores = [0.0, 0.0, 0.0]
+    this_dl = tasks[task_name]["dataloaders"][1] if valid else tasks[task_name]["dataloaders"][2]
+    loss_s = tasks[task_name]["loss_s"]
+    has_prompt = tasks[task_name].get("has_prompt", False)
+    assert has_prompt, "MMS task requires prompt!"
+    logger.info("Validating..." if valid else "Testing...")
+    model.to(device)
+    model.eval()
+    for x, y, m, _, hy in this_dl:
+        x, y, m, hy = x.to(device), y.to(device), m.to(device), hy.to(device)
+        p_m, _, _ = model(x, None, hy)
+        eval_scores[0] += mse_loss(p_m[:, loss_s[1]], m[:, loss_s[1]], reduction="sum").item()
+        eval_scores[1] += pixel_error(p_m[:, loss_s[1]], m[:, loss_s[1]], reduction="sum").item()
+        eval_scores[2] += normed_acc(p_m[:, loss_s[1]], m[:, loss_s[1]], reduction="sum").item()
+    eval_scores[0] /= this_dl.dataset.__len__()
+    eval_scores[1] /= this_dl.dataset.__len__()
+    eval_scores[2] /= this_dl.dataset.__len__()
+    # log and plot
+    logger.info(f"V-MSE: {eval_scores[0]:.6f} V-Pix: {eval_scores[1]:.6f} V-Acc: {eval_scores[2]:.6f}")
+    return eval_scores
+
