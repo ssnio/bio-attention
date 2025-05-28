@@ -23,14 +23,15 @@ random.seed(1821)
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-n_epochs', type=int, default=96)
+parser.add_argument('-n_epochs', type=int, default=128)
 parser.add_argument('-batch_size', type=int, default=128)
 parser.add_argument('-lr', type=float, default=0.0005)
 parser.add_argument('-l2', type=float, default=1e-6)
 parser.add_argument('-exase', type=str, default="default")
+parser.add_argument('-data_path', type=str, default=r"./data")
 parser.add_argument('-verbose', type=int, default=1)
 argus = parser.parse_args()
-data_path = r"./data"
+data_path = argus.data_path
 train_params = {
     "n_epochs": argus.n_epochs,
     "batch_size": argus.batch_size,
@@ -38,9 +39,11 @@ train_params = {
     "l2": argus.l2,
     "exase": argus.exase,
     "dir": r"./results",
-    "milestones": [32, 64],
+    "milestones": [64, 96],
     "gamma": 0.2,
     "max_grad_norm": 10.0,
+    "scheduler": "MultiStepLR",
+    "last_lr_ratio": 0.02,
 }
 
 model_params = {
@@ -66,6 +69,7 @@ model_params = {
     "rnn_dropouts": 0.0,  # dropout in the RNN
     "rnn_funs": torch.nn.ReLU(),  # activation function in the RNN
     "n_tasks": 7,  # number of tasks
+    "task_layers": 1, # number of layers to use for the tasks (-1 means all layers and 0 means no layers except the bottleneck)
     "task_weight": True,  # use tasks embeddings for the decoder channels (multiplicative)
     "task_bias": True,  # use tasks embeddings for the decoder channels  (additive)
     "task_funs": torch.nn.Tanh(),  # activation function for the tasks embeddings
@@ -108,7 +112,7 @@ tasks["Cue"] = {
     "datasets": [],
     "dataloaders": [],
     "loss_w": (0.0, 1.0, 1.0),  # labels, masks, last label
-    "loss_s": ((4, ), slice(1, None, None)),  # labels, masks
+    "loss_s": (None, slice(1, None)),  # labels, masks
     "has_prompt": False,
 }
 tasks["Tracking"] = {
@@ -117,7 +121,7 @@ tasks["Tracking"] = {
     "params": {"fix_attend": (2, 5), "n_digits": 4, "noise": 0.25},
     "datasets": [],
     "dataloaders": [],
-    "loss_w": (1.0, 1.0, 1.0),  # labels, masks, last label
+    "loss_w": (1.0, 2.0, 1.0),  # labels, masks, last label
     "loss_s": (slice(1, None), slice(1, None)),  # labels, masks
     "has_prompt": False,
 }
@@ -161,8 +165,8 @@ for i, k in enumerate(tasks):
 (argus.verbose == 1) and logger.info(f"tasks\n {pformat(tasks)}")
 
 # datasets and dataloaders
-tralid_ds = datasets.MNIST(root=data_path, train=True, download=True, transform=transforms.ToTensor())
-test_ds = datasets.MNIST(root=data_path, train=False, download=True, transform=transforms.ToTensor())
+tralid_ds = datasets.MNIST(root=data_path, train=True, download=False, transform=transforms.ToTensor())
+test_ds = datasets.MNIST(root=data_path, train=False, download=False, transform=transforms.ToTensor())
 train_ds, valid_ds = random_split(tralid_ds, (50000, 10000))
 DeVice, num_workers, pin_memory = get_device()
 for o in tasks:
