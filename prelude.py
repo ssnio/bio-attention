@@ -41,17 +41,21 @@ def startup_folders(dir: str, name: str = None):
         print(f"{dir} was created!")
 
     # # create folder for results
-    folder_id = int(time.time())
-    results_folder = os.path.join(dir, str(folder_id))
-    while os.path.exists(results_folder):
-        folder_id += 1
-        results_folder = os.path.join(dir, str(folder_id))
-    os.makedirs(results_folder)
+    while True:
+        try:
+            folder_id = f"{int(time.time())}"
+            results_folder = os.path.join(dir, folder_id)
+            os.makedirs(results_folder)
+            break
+        except FileExistsError:
+            pass
+
     print(f"{results_folder} was created!")
 
     # # setup logger
-    logger = setup_logger(results_folder, name, str(folder_id))
+    logger = setup_logger(results_folder, name, folder_id)
     return results_folder, logger
+
 
 def save_dicts(dicts, dir, name, logger):
     for k, v in dicts.items():
@@ -103,7 +107,7 @@ def get_device():
     # # set device preferably to GPU
     num_workers, pin_memory = 0, False
     if torch.cuda.is_available():
-        device = torch.device("cuda:0")  # NVIDIA GPU
+        device = torch.device("cuda")  # NVIDIA GPU
         num_workers, pin_memory = 4, True
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and torch.backends.mps.is_built():
         device = torch.device("mps")  # Apple Silicon (Metal)
