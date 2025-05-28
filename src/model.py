@@ -217,7 +217,8 @@ class AttentionModel(torch.nn.Module):
         self.task_bias = task_bias if self.n_tasks > 1 else False
         self.task_funs = task_funs if self.n_tasks > 1 else None
         self.conv_dims = [self.in_dims]
-        self.rnn_to_fc = rnn_to_fc
+        self.frnn_to_fc = rnn_to_fc
+        self.brnn_to_fc = rnn_to_fc
         self.bridge_norm = "layer"
         self.trans_fun = trans_fun
         self.affine = affine
@@ -254,7 +255,7 @@ class AttentionModel(torch.nn.Module):
         )
         
         for i in range(self.n_rnns):
-            if self.rnn_to_fc:
+            if self.frnn_to_fc:
                 self.frnn_blocks.append(torch.nn.Sequential(
                     torch.nn.Linear(self.rnn_dims[i], self.rnn_dims[i+1], bias=self.rnn_bias[i]),
                     torch.nn.Dropout(self.rnn_dropouts[i]) if self.rnn_dropouts[i] > 0.0 else torch.nn.Identity(),
@@ -268,7 +269,7 @@ class AttentionModel(torch.nn.Module):
         self.fc_out = torch.nn.Linear(self.rnn_dims[-1], out_dim)
         self.fc_in = torch.nn.Linear(self.task_dim + out_dim, self.rnn_dims[-1])
         for i in range(1, self.n_rnns + 1):
-            if self.rnn_to_fc:
+            if self.brnn_to_fc:
                 self.brnn_blocks.append(torch.nn.Sequential(
                     torch.nn.Linear(self.rnn_dims[-i], self.rnn_dims[-i-1], bias=self.rnn_bias[-i]),
                     torch.nn.Dropout(self.rnn_dropouts[-i]) if self.rnn_dropouts[-i] > 0.0 else torch.nn.Identity(),
@@ -380,7 +381,7 @@ class AttentionModel(torch.nn.Module):
 
             # forward recurrent layers
             for i in range(self.n_rnns):
-                h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+                h = self.frnn_blocks[i](h) if self.frnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
                 self.hstates[f"f_state{i}"] = h
                 act_[self.n_convs + i + 1][r] = h
 
@@ -393,7 +394,7 @@ class AttentionModel(torch.nn.Module):
             # backward recurrent layers
             h = self.fc_in(h)
             for i in range(self.n_rnns):
-                h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
+                h = self.brnn_blocks[i](h) if self.brnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
                 self.hstates[f"b_state{i}"] = h
             
             # backward linear layer
@@ -447,7 +448,7 @@ class AttentionModel(torch.nn.Module):
 
         # forward recurrent layers
         for i in range(self.n_rnns):
-            h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+            h = self.frnn_blocks[i](h) if self.frnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
             self.hstates[f"f_state{i}"] = h
             act_[self.n_convs + i + 1] = h
 
@@ -485,7 +486,7 @@ class AttentionModel(torch.nn.Module):
 
         # forward recurrent layers
         for i in range(self.n_rnns):
-            h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+            h = self.frnn_blocks[i](h) if self.frnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
             self.hstates[f"f_state{i}"] = h
             act_.append(h)
 
@@ -498,7 +499,7 @@ class AttentionModel(torch.nn.Module):
         # backward recurrent layers
         h = self.fc_in(h)
         for i in range(self.n_rnns):
-            h = self.brnn_blocks[i](h) if self.rnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
+            h = self.brnn_blocks[i](h) if self.brnn_to_fc else self.brnn_blocks[i](h, self.hstates[f"b_state{i}"])
             self.hstates[f"b_state{i}"] = h
         
         # backward linear layer
@@ -532,7 +533,7 @@ class AttentionModel(torch.nn.Module):
 
         # forward recurrent layers
         for i in range(self.n_rnns):
-            h = self.frnn_blocks[i](h) if self.rnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
+            h = self.frnn_blocks[i](h) if self.frnn_to_fc else self.frnn_blocks[i](h, self.hstates[f"f_state{i}"])
             self.hstates[f"f_state{i}"] = h
 
         # output
