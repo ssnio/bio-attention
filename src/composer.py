@@ -141,7 +141,7 @@ def coord_to_points(x: torch.tensor, i: int, j: int, k: int):
 
 def routine_01(composites: torch.Tensor, masks: torch.Tensor, noise: float = 0.0):
     # adding noise and clamping 
-    composites += torch.rand(1) * noise * torch.rand_like(composites)
+    composites += torch.rand(()) * noise * torch.rand_like(composites)
     composites = torch.clamp(composites, 0.0, 1.0)
     masks = torch.clamp(masks, 0.0, 1.0)
     masks = 2.0 * (masks - 0.5)
@@ -264,7 +264,7 @@ class IOR_DS(Dataset):
 class Arrow_DS(Dataset):
     def __init__(self,
                  mnist_dataset: Dataset,  # MNIST datasets
-                 n_iter: tuple,  # number of iterations
+                 n_iter: int,  # number of iterations
                  noise: float = 0.25,  # noise scale
                  directory: str = r"./data/",  # directory of the arrow images
                  ):
@@ -529,7 +529,7 @@ class Recognition_DS(Dataset):
 class Search_DS(Dataset):
     def __init__(self,
                  mnist_dataset: Dataset,  # MNIST datasets
-                 n_iter: tuple,  # number of iterations
+                 n_iter: int,  # number of iterations
                  n_digits: int,  # number of digits
                  noise: float = 0.25,  # noise scale
                  overlap: float = 1.0,  # maximum permissible overlap between digits
@@ -723,7 +723,7 @@ class Tracking_DS(Dataset):
 class Popout_DS(Dataset):
     def __init__(self,
                  mnist_dataset: Dataset,  # MNIST datasets
-                 n_iter: tuple,  # number of iterations
+                 n_iter: int,  # number of iterations
                  noise: float = 0.25,  # noise scale
                  ):
         
@@ -853,7 +853,7 @@ class CelebACrop(Dataset):
         composites[:] = self.transform(x)
         labels = torch.zeros(self.n_iter).long()
         labels[:] = y[self.gender_i]
-        composites += torch.rand(1) * self.noise * torch.rand_like(composites)
+        composites += torch.rand(()) * self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
         return composites, labels, 0, 0, 0
 
@@ -1180,7 +1180,7 @@ class PerceptualGrouping_COCO(Dataset):
         self.noise = 0.0
 
     def get_fixed_point(self, m: torch.tensor):
-        if torch.rand(1).item() > 0.5 or self.kind == "not_train":
+        if torch.rand(()) > 0.5 or self.kind == "not_train":
             ci, cj = center_of_mass(m)
         else:
             ci, cj = self.fix_pointer.get_rand_fix_point(m)
@@ -1222,7 +1222,7 @@ class PerceptualGrouping_COCO(Dataset):
 class ExpSearch_COCO_v2(Dataset):
     def __init__(self,
                  coco_dataset: COCOAnimals,
-                 n_iter: tuple,
+                 n_iter: int,
                  noise: float = 0.25,):
         
         super().__init__()
@@ -1278,7 +1278,7 @@ class ExpSearch_COCO_v2(Dataset):
 class Search_COCO(Dataset):
     def __init__(self,
                  coco_dataset: COCOAnimals,
-                 n_iter: tuple,
+                 n_iter: int,
                  noise: float = 0.25,):
         
         super().__init__()
@@ -1328,7 +1328,6 @@ class Search_COCO(Dataset):
         # adding noise and clamping 
         composites, masks = routine_01(composites, masks, self.noise)
 
-
         return composites, labels, masks, components, hot_labels
 
 
@@ -1336,7 +1335,7 @@ class SearchGrid_COCO(Dataset):
     def __init__(self,
                  coco_dataset: COCOAnimals,
                  bg_dataset: BG20k,
-                 n_iter: tuple,
+                 n_iter: int,
                  noise: float = 0.25,):
         
         super().__init__()
@@ -1471,7 +1470,7 @@ class Recognition_COCO(Dataset):
     def __init__(self,
                  coco_dataset: COCOAnimals,
                  bg_dataset: BG20k,
-                 n_iter: tuple,
+                 n_iter: int,
                  stride: int,
                  static: bool,
                  blank: bool,
@@ -1855,9 +1854,9 @@ class CurveTracing(Dataset):
         masks = 2.0 * (masks - 0.5)
 
         # noise
-        target_composites += self.noise * torch.rand(1) * torch.randn_like(target_composites)
+        target_composites += self.noise * torch.rand(()) * torch.randn_like(target_composites)
         target_composites = torch.clamp(target_composites, 0.0, 1.0)
-        distractor_composites += self.noise * torch.rand(1) * torch.randn_like(distractor_composites)
+        distractor_composites += self.noise * torch.rand(()) * torch.randn_like(distractor_composites)
         distractor_composites = torch.clamp(distractor_composites, 0.0, 1.0)
 
         # components
@@ -1877,7 +1876,7 @@ class CurveTracing(Dataset):
 class ArrowCur_DS(Dataset):
     def __init__(self,
                  mnist_dataset: Dataset,  # MNIST datasets
-                 n_iter: tuple,  # number of iterations
+                 n_iter: int,  # number of iterations
                  noise: float = 0.25,  # noise scale
                  directory: str = r"./data/",  # directory of the arrow images
                  ):
@@ -1961,8 +1960,6 @@ class ArrowCur_DS(Dataset):
         return composites, labels, masks, components, hot_labels
 
 
-
-
 class Colors:
     def __init__(self, noise: float = 0.0, ext: bool = False) -> None:
         self.noise = noise
@@ -1986,7 +1983,7 @@ class Colors:
     
     def __getitem__(self, i):
         c = self.colors[i]
-        n = torch.randn_like(c) * self.noise * torch.rand(1)
+        n = torch.randn_like(c) * self.noise * torch.rand(())
         return (c + n).clamp(0.0, 1.0)
 
 
@@ -2011,6 +2008,7 @@ class Textures:
 
     def solid(self):
         return torch.rand(3, 1, 1) * torch.ones(1, self.h, self.w)
+        # return torch.ones(1, self.h, self.w)
 
     def __len__(self):
         return self.n_textures
@@ -2150,7 +2148,7 @@ class Search_MM(Dataset):
             components[i, j, 0], components[i, j, 1], components[i, j, 2] = y, c, t
             if y == t_y and c == t_c and t == t_t:
                 masks[:, :, i*self.dh:(i+1)*self.dh, j*self.dw:(j+1)*self.dw] = 1.0
-            # if torch.rand(1) < 0.125:
+            # if torch.rand(()) < 0.125:
             #     break
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
@@ -2524,7 +2522,7 @@ class Single_CIFAR(Dataset):
             j = torch.randint(0, self.w - self.ww, (1, ))
         composites[:, :, i:i+self.hh, j:j+self.ww] = x
 
-        composites += torch.rand(1) * self.noise * torch.rand_like(composites)
+        composites += torch.rand(()) * self.noise * torch.rand_like(composites)
         composites = torch.clamp(composites, 0.0, 1.0)
         if self.n_iter == 0:
             return composites[0], labels[0]
