@@ -37,6 +37,11 @@ def gaussian_patch(h: int, w: int, s: float) -> torch.Tensor:
     zz = torch.exp(-0.5 * (xx ** 2 + yy ** 2) / s ** 2)
     return zz
 
+def gaussian_line(w: int, m: int, s: int) -> torch.Tensor:
+    x = torch.linspace(0, w, w)
+    y = torch.exp(-(x - m)**2 / s)
+    return x, y
+
 def do_n_it(x: Union[torch.Tensor, int], n: int):
     if isinstance(x, torch.Tensor):
         return x.unsqueeze(0).expand(n, -1, -1, -1)
