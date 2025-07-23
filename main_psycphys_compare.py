@@ -21,7 +21,7 @@ parser.add_argument("-verbose", type=int, default=1)
 parser.add_argument("-data_path", type=str, default=r"./data")
 argus = parser.parse_args()
 data_path = argus.data_path
-results_folder, logger = startup_folders(r"./results", name=f"exp_a_coco_{argus.exase}")
+results_folder, logger = startup_folders(r"./results", name=f"exp_psycphys_{argus.exase}")
 
 train_params = {
     "n_epochs": argus.n_epochs,
