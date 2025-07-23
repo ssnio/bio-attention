@@ -3057,6 +3057,117 @@ class PsychCompare(Dataset):
         return composites, labels, masks, components, hot_labels
 
 
+
+class PsychChange(Dataset):
+    def __init__(self,
+                 episodes: tuple = (1, 2, 1, 3),
+                 r_range: int = 45,
+                 r_base: int = 5,
+                 biased: float = 0.0,
+                 force_range: bool = False,
+                 force_label: bool = False,
+                 force_neutral: bool = False,
+                 n_objects: int = 8,
+                 noise: float = 0.25,
+                 n_samples: int = 1024,
+                 ):
+        super().__init__()
+        self.n_grid = 3
+        self.n_objects = n_objects
+        self.hh, self.ww = 32, 32
+        self.offcenter_locations = torch.tensor([0, 1, 2, 3, 5, 6, 7, 8])
+        self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
+        self.gg = self.n_grid * self.n_grid
+        self.epidodes = episodes
+        self.ep_no1, self.ep_cue, self.ep_no2, self.ep_stim = episodes  # noise1, cue, noise1, stimulus
+        self.ep_no1_cue = self.ep_no1 + self.ep_cue
+        self.ep_no1_cue_no2 = self.ep_no1_cue + self.ep_no2
+        self.n_iter = sum(episodes)
+        self.r_range = r_range
+        self.r_base = r_base
+        self.biased = biased
+        self.force_range = force_range
+        self.force_label = force_label
+        self.force_neutral = force_neutral
+        self.noise = noise
+        self.n_samples = n_samples
+        self.raw_gabors = self.load_gabors()
+        self.gaussian = gaussian_patch(self.hh, self.ww, 6.0)
+        self.cue = gaussian_patch(self.hh, self.ww, 6.0)
+        self.ranger = lambda x: x[0] + (torch.rand(()) * (x[1] - x[0])) if isinstance(x, (tuple, list)) else x
+        
+    def load_gabors(self):
+        z = gaussian_patch(64, 64, 12.0)
+        gabors = torch.zeros(180, 1, 64, 64)
+        for i in range(180):
+            x = gabor(64, 64, 0.75, i * math.pi / 180.0, 12.0)
+            gabors[i, 0] = x * z
+            gabors[i, 0] /= gabors[i, 0].max()  # normalize to [0, 1]
+        return transforms.Resize((self.hh, self.ww), interpolation=transforms.InterpolationMode.BILINEAR, antialias=True)(gabors)
+
+    def make_slice(self, i: int, j: int):
+        h_slice = slice(i * self.hh, (i + 1) * self.hh)
+        w_slice = slice(j * self.ww, (j + 1) * self.ww)
+        return h_slice, w_slice
+
+    def __len__(self):
+        return self.n_samples
+    
+    def __getitem__(self, idx):
+        composites = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter, dtype=torch.long)
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        components = 0
+        hot_labels = 0
+        
+        # motion and locations
+        n_objects = self.n_objects if self.n_objects > 0 else torch.randint(1, self.gg, (())).item()
+        no_change = False if self.force_label else (torch.rand(()) < 0.5)
+        locations = self.offcenter_locations[torch.randperm(self.gg-1)].tolist()
+        m_noise = torch.randint(-self.r_base, self.r_base, (n_objects, self.ep_stim)) if self.r_base > 0 else torch.zeros(n_objects, self.ep_stim)
+        offset = torch.randint(0, 180, (n_objects, 1))
+        motions = m_noise + offset
+        if no_change:
+            labels[-self.ep_stim:] = 4
+        else:
+            labels[-self.ep_stim:] = locations[0]
+            if self.force_range:
+                m_delta = self.r_range
+            else:
+                m_delta = (-1 if torch.rand(()) < 0.5 else 1) * torch.randint(self.r_base, self.r_range, (()))
+            motions[0] += (m_delta * torch.arange(self.ep_stim)).long()
+        motions = motions % 180
+
+        # building compositions
+        if self.ep_no1 > 0:  # noise1
+            composites[:self.ep_no1, :, :, :] = self.noise * torch.rand(self.ep_no1, 1, self.h, self.w)
+        if self.ep_no2 > 0:  # noise2
+            composites[self.ep_no1_cue:self.ep_no1_cue_no2, :, :, :] = self.noise * torch.rand(self.ep_no2, 1, self.h, self.w)
+
+        # cue
+        cue_loc = locations[1] if (self.biased < 0.0 and n_objects > 1) else locations[0] if torch.rand(()) < self.biased else torch.randint(0, self.gg, ()).item()
+        cue_loc = 4 if self.force_neutral else cue_loc
+        i, j = divmod(cue_loc, self.n_grid)
+        h_slice, w_slice = self.make_slice(i, j)
+        composites[self.ep_no1:self.ep_no1_cue, :, h_slice, w_slice] = self.cue
+        masks[self.ep_no1:self.ep_no1_cue, :, h_slice, w_slice] = self.gaussian
+
+        # gratings
+        for k in range(n_objects):
+            loc = locations[k]
+            i, j = divmod(loc, self.n_grid)
+            h_slice, w_slice = self.make_slice(i, j)
+            # print(self.ep_stim, h_slice, w_slice, k, motions, motions[k])
+            composites[-self.ep_stim:, :, h_slice, w_slice] = self.raw_gabors[motions[k]]
+            if k == 0 and not no_change:
+                masks[-self.ep_stim:, :, h_slice, w_slice] = self.gaussian
+    
+        composites += torch.randn_like(composites) * self.noise * torch.rand(())
+        torch.clamp_(composites, 0.0, 1.0)
+
+        return composites, labels, masks, components, hot_labels
+
+
 class PsychGrating(Dataset):
     def __init__(self,
                  episodes: tuple = (1, 2, 1, 3),
