@@ -3056,3 +3056,143 @@ class PsychCompare(Dataset):
         
         return composites, labels, masks, components, hot_labels
 
+
+class PsychGrating(Dataset):
+    def __init__(self,
+                 episodes: tuple = (1, 2, 1, 3),
+                 a_range: tuple = (0.1, 0.9),
+                 n_range: tuple = (0.25, 0.5),
+                 b_range: tuple = (0.125, 0.25),
+                 biased: float = 0.0,
+                 rot_noise: int = 5,
+                 cls_rot: bool = False,
+                 force_range: bool = False,
+                 force_label: bool = False,
+                 force_cue: bool = False,
+                 force_loc: bool = False,
+                 gabor_cue: bool = False,
+                 show_cue: bool = False,
+                 cue_loc_off: int = False,
+                 decay_rate: float = 0.0,
+                 n_samples: int = 1024,
+                 ):
+        super().__init__()
+        self.n_grid = 3
+        self.hh, self.ww = 32, 32
+        self.offcenter_locations = torch.tensor([0, 1, 2, 3, 5, 6, 7, 8])
+        self.h, self.w = self.n_grid * self.hh, self.n_grid * self.ww
+        self.gg = self.n_grid * self.n_grid
+        self.epidodes = episodes
+        self.ep_no1, self.ep_cue, self.ep_no2, self.ep_stim = episodes  # noise1, cue, noise1, stimulus
+        self.ep_no1_cue = self.ep_no1 + self.ep_cue
+        self.ep_no1_cue_no2 = self.ep_no1_cue + self.ep_no2
+        self.n_iter = sum(episodes)
+        self.a_range = a_range
+        self.n_range = n_range
+        self.b_range = b_range
+        self.biased = biased
+        self.cls_rot = cls_rot
+        self.rot_noise = rot_noise
+        self.force_range = force_range
+        self.force_label = force_label
+        self.force_cue = force_cue
+        self.force_loc = force_loc
+        self.show_cue = show_cue
+        self.cue_loc_off = cue_loc_off
+        self.gabor_cue = gabor_cue
+        self.decay_rate = decay_rate
+        self.n_samples = n_samples
+        self.raw_gabors = self.load_gabors()
+        self.gaussian = gaussian_patch(self.hh, self.ww, 8.0)
+        self.cue = gaussian_patch(self.hh, self.ww, 8.0)
+        decay = torch.pow(torch.tensor([self.decay_rate]), torch.arange(self.ep_stim))
+        self.decay = torch.cat([torch.ones(self.ep_no1_cue_no2), decay], dim=0)
+        self.ranger = lambda x: x[0] + (torch.rand(()) * (x[1] - x[0])) if isinstance(x, (tuple, list)) else x
+
+    def load_gabors(self):
+        z = gaussian_patch(64, 64, 12.0)
+        gabors = torch.zeros(180, 1, 64, 64)
+        for i in range(180):
+            x = gabor(64, 64, 0.75, i * math.pi / 180.0, 12.0)
+            gabors[i, 0] = x * z
+            gabors[i, 0] /= gabors[i, 0].max()  # normalize to [0, 1]
+        return transforms.Resize((self.hh, self.ww), interpolation=transforms.InterpolationMode.BILINEAR, antialias=True)(gabors)
+
+    def make_slice(self, i: int, j: int):
+        h_slice = slice(i * self.hh, (i + 1) * self.hh)
+        w_slice = slice(j * self.ww, (j + 1) * self.ww)
+        return h_slice, w_slice
+
+    def __len__(self):
+        return self.n_samples
+    
+    def __getitem__(self, idx):
+        composites = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter, 2) if self.cls_rot else torch.zeros(self.n_iter)
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        components = 0
+        hot_labels = 0
+        
+        # motion and locations
+        show_gabor = True if self.force_label else (torch.rand(()) < 0.5)
+        show_cue = True if self.force_cue else (torch.rand(()) < 0.5)
+        gabor_loc = self.offcenter_locations[torch.randint(0, 8, (()))].item()
+        cue_loc = gabor_loc if (self.force_loc or torch.rand(()) < self.biased) else torch.randint(0, self.gg, (())).item()
+        cue_loc = self.offcenter_locations[(gabor_loc+4)%8].item() if self.cue_loc_off else cue_loc
+        amplitude = self.a_range if self.force_range else self.ranger(self.a_range)
+
+        # cue
+        this_cue = self.raw_gabors[torch.randint(0, 180, (())).item()] if self.gabor_cue else self.cue
+        if show_cue:
+            i, j = divmod(cue_loc, self.n_grid)
+            h_slice, w_slice = self.make_slice(i, j)
+            composites[self.ep_no1:self.ep_no1_cue, :, h_slice, w_slice] = this_cue
+            masks[self.ep_no1:self.ep_no1_cue, :, h_slice, w_slice] = self.gaussian
+            if self.cls_rot:
+                labels[self.ep_no1:self.ep_no1_cue, 0] = cue_loc
+                # labels[self.ep_no1:self.ep_no1_cue, 1] = rot_label
+            else:
+                labels[self.ep_no1:self.ep_no1_cue] = cue_loc
+        else:
+            if self.show_cue:
+                i, j = divmod(4, self.n_grid)
+                h_slice, w_slice = self.make_slice(i, j)
+                composites[self.ep_no1:self.ep_no1_cue, :, h_slice, w_slice] = this_cue
+                masks[self.ep_no1:self.ep_no1_cue, :, h_slice, w_slice] = self.gaussian
+            labels[self.ep_no1:self.ep_no1_cue] = 4
+
+        # gabor
+        if show_gabor:
+            if self.cls_rot:
+                rot_label = torch.randint(0, 4, (())).item()
+                rot_noise = torch.randint(-self.rot_noise, self.rot_noise, (())).item()
+                rotation = ((rot_label * 45) + rot_noise) % 180
+                labels[-self.ep_stim:, 0] = gabor_loc
+                labels[-self.ep_stim:, 1] = rot_label
+            else:
+                rotation = torch.randint(0, 180, (())).item()
+                labels[-self.ep_stim:] = gabor_loc
+            gabor = self.raw_gabors[rotation]
+            gabor = gabor * amplitude
+            i, j = divmod(gabor_loc, self.n_grid)
+            h_slice, w_slice = self.make_slice(i, j)
+            composites[-self.ep_stim:, :, h_slice, w_slice] = gabor
+            masks[-self.ep_stim:, :, h_slice, w_slice] = self.gaussian
+        else:
+            labels[-self.ep_stim:] = 4
+
+        # noise
+        if self.decay_rate > 0.0:
+            noise = self.ranger(self.n_range) * self.decay
+            bias = min(self.ranger(self.b_range), 1.0 - amplitude)
+            composites[:] += (noise[:, None, None, None] * torch.randn_like(composites) + bias)
+        else:
+            noise = self.ranger(self.n_range)
+            bias = min(self.ranger(self.b_range), 1.0 - amplitude)
+            composites[:] += (noise * torch.randn_like(composites) + bias)
+        torch.clamp_(composites, 0.0, 1.0)
+        labels = labels.long()
+        masks = 2.0 * (masks - 0.5)
+        
+        return composites, labels, masks, components, hot_labels
+
