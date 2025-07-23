@@ -936,3 +936,104 @@ def mms_eval(
     logger.info(f"V-MSE: {eval_scores[0]:.6f} V-Pix: {eval_scores[1]:.6f} V-Acc: {eval_scores[2]:.6f}")
     return eval_scores
 
+
+def seq_cls_train(
+    model: AttentionModel, 
+    tasks: dict,
+    optimizer: torch.optim.Adam, 
+    scheduler: torch.optim.lr_scheduler.LRScheduler, 
+    n_epochs: int,
+    device: torch.device,
+    logger: Logger,
+    max_grad_norm: float = 10.0,
+):
+    logger.info("Training...")
+    task_content = next(iter(tasks.values()))
+    train_dl = task_content["dataloaders"][0]
+    loss_s = task_content["loss_s"]
+    loss_w = task_content["loss_w"]
+    loss_log = []
+    eval_log = [[[] for _ in loss_s[0]], 
+                [[] for _ in loss_s[0]], 
+                [[] for _ in loss_s[1]] if loss_s[1] is not None else []]
+    n_bs = len(train_dl)
+    model.to(device)
+    for epoch in range(n_epochs):
+        model.train()
+        epoch_t = time.time()
+        for x, y, m, *_ in train_dl:
+            x, y, m = x.to(device), y.to(device), m.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            p_m, p_y, a_ = model(x)
+            loss = 0.0
+            for i, s in enumerate(loss_s[0]):
+                loss = loss + loss_w[0][i] * cross_entropy(p_y[:, :, s], y[:, s])
+            if loss_s[1] is not None:
+                for i, s in enumerate(loss_s[1]):
+                    loss = loss + loss_w[1][i] * mse_loss(p_m[:, s], m[:, s])
+            loss.backward()
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            if isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                scheduler.step()
+            loss_log.append(loss.item())
+
+        if scheduler is not None:
+            if not isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                scheduler.step()
+            logger.info(f"lr: {scheduler.get_last_lr()}")
+
+        logger.info(f"Epoch {epoch+1} in {time.time()-epoch_t:.2f} sec")
+        logger.info(f"\t CE-Loss: {sum(loss_log[-n_bs:])/n_bs:.4f}")
+
+        val_ce, val_acc, val_mse = seq_cls_eval(model, tasks, device, logger)
+        for i, s in enumerate(loss_s[0]):
+            eval_log[0][i].append(val_ce[i])
+            eval_log[1][i].append(val_acc[i])
+        if loss_s[1] is not None:
+            for i, s in enumerate(loss_s[1]):
+                eval_log[2][i].append(val_mse[i])
+
+    model.eval()
+    return loss_log, eval_log
+
+
+def seq_cls_eval(
+    model: AttentionModel, 
+    tasks: dict,
+    device: torch.device,
+    logger: Logger,
+    valid: bool = True,
+    verbose: bool = True,
+):
+    task_content = next(iter(tasks.values()))
+    loss_s = task_content["loss_s"]
+    loss_w = task_content["loss_w"]
+    this_dl = task_content["dataloaders"][1] if valid else task_content["dataloaders"][2]
+    n_bs = len(this_dl.dataset)
+    verbose and logger.info("Validating..." if valid else "Testing...")
+    ce_loss = [0.0 for _ in loss_s[0]]
+    accuracy = [0 for _ in loss_s[0]]
+    mask_loss = [0.0 for _ in loss_s[1]] if loss_s[1] is not None else []
+    model.to(device)
+    model.eval()
+    with torch.no_grad():
+        for x, y, m, _, _ in this_dl:
+            x, y, m = x.to(device), y.to(device), m.to(device)
+            p_m, p_y, a_ = model(x)
+            for i, s in enumerate(loss_s[0]):
+                ce_loss[i] += cross_entropy(p_y[:, :, s], y[:, s], reduction='sum').item()
+                accuracy[i] += (p_y[:, :, s].argmax(dim=1) == y[:, s]).sum().item()
+            if loss_s[1] is not None:
+                for i, s in enumerate(loss_s[1]):
+                    mask_loss[i] += mse_loss(p_m[:, s], m[:, s], reduction='sum').item()
+        for i, s in enumerate(loss_s[0]):
+            ce_loss[i] = ce_loss[i]/n_bs
+            accuracy[i] = accuracy[i]/n_bs
+            verbose and logger.info(f"\t {s} CE-Loss: {ce_loss[i]:.4f}")
+            verbose and logger.info(f"\t {s} Acc: {accuracy[i]:.4f}")
+        if loss_s[1] is not None:
+            for i, s in enumerate(loss_s[1]):
+                mask_loss[i] = mask_loss[i]/n_bs
+                verbose and logger.info(f"\t {s} Mask MSE: {mask_loss[i]:.4f}")
+    return ce_loss, accuracy, mask_loss
