@@ -5,6 +5,25 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 # # other modules
 import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+import numpy
+
+# fit a sigmoid function to the data
+def sigmoid(x, a, b, c, d):
+    return d + (c / (1 + numpy.exp(-a * (x - b))))
+
+def fit_sigmoid(x, y):
+    x = numpy.array(x) if not isinstance(x, numpy.ndarray) else x
+    y = numpy.array(y) if not isinstance(y, numpy.ndarray) else y
+
+    # Initial guess for the parameters
+    initial_guess = [1.0, numpy.mean(x), 1.0, 0.0]
+
+    # Fit the sigmoid function to the data
+    params, _ = curve_fit(sigmoid, x, y, p0=initial_guess)
+    # params, _ = curve_fit(sigmoid, x, y, p0=initial_guess, bounds=([0, 0, 0], [numpy.inf, numpy.inf, 1]))
+
+    return params
 
 
 def obj_to_tuple(obj: Any, n: int, do: bool = False):
