@@ -859,6 +859,65 @@ class PatternedRecognition_DS(Dataset):
 
         return composites, labels, masks, components, hot_labels
 
+
+class LineRecognition_DS(Dataset):
+    def __init__(self,
+                 mnist_dataset: Dataset,  # MNIST datasets
+                 n_iter: int,  # number of iterations
+                 ):
+        
+        super().__init__()
+        self.dataset = mnist_dataset
+        self.n_iter = n_iter
+        self.h, self.w = 96, 96
+        self.hh, self.ww = 42, 42
+        self.hor = torch.tensor([[1, 1, 1, 1],
+                                 [0, 0, 0, 0],
+                                 [1, 1, 1, 1],
+                                 [0, 0, 0, 0]]).float().reshape(1, 4, 4).repeat(1, 96//4, 96//4)
+        self.ver = self.hor.permute(0, 2, 1)
+        self.patterns = torch.stack([self.hor, self.ver])
+        self.resize = transforms.Resize((self.hh, self.ww), antialias=True)
+    def build_valid_test(self):
+        pass
+
+    def __len__(self):
+        return self.dataset.__len__()
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset.__getitem__(idx)
+        x = self.resize(x)
+        x = (x > 0.5).float()
+        t = torch.zeros(1, self.h, self.w)
+        p_top = torch.randint(0, self.h - self.hh, (1,)).item()
+        p_left = torch.randint(0, self.w - self.ww, (1,)).item()
+        t[:, p_top:p_top+self.hh, p_left:p_left+ self.ww] = x
+        
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = 0
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = 0
+
+        # assignment
+        labels[:] = y
+        masks[:] = t
+
+        # get background and foreground
+        color = torch.rand(3, 1, 1)
+        rand_txt = torch.randperm(2)
+        (background, foreground) = self.patterns[rand_txt]
+        composites[:] = color * ((t * foreground) + (1 - t) * background)
+
+        # adding noise and clamping 
+        composites = torch.clamp(composites, 0.0, 1.0)
+        masks = torch.clamp(masks, 0.0, 1.0)
+        masks = 2.0 * (masks - 0.5)
+
+        return composites, labels, masks, components, hot_labels
+
+
 class CelebACrop(Dataset):
     def __init__(self,
                  dataset: Dataset,
