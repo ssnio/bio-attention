@@ -272,6 +272,7 @@ class Arrow_DS(Dataset):
                  n_iter: int,  # number of iterations
                  noise: float = 0.25,  # noise scale
                  directory: str = r"./data/",  # directory of the arrow images
+                 exclude: bool = True,  # whether to exclude the digit class from the random samples
                  ):
         
         super().__init__()
@@ -279,6 +280,7 @@ class Arrow_DS(Dataset):
         self.dataset = mnist_dataset
         self.n_iter = n_iter
         self.noise = noise
+        self.exclude = exclude
         self.pad = 2
         self.c, h, w = self.dataset[0][0].shape
         self.h, self.w = 96, 96
@@ -299,7 +301,8 @@ class Arrow_DS(Dataset):
             t.remove(y)
             cls = random.choice(t)
         else:
-            cls = y
+            # cls = y
+            cls = random.choice(list(range(10)))
         i = self.class_ids[cls][torch.randint(0, len(self.class_ids[cls]), (1, )).item()]
         return self.dataset.__getitem__(i)
 
@@ -310,6 +313,7 @@ class Arrow_DS(Dataset):
         return arrows
 
     def build_valid_test(self):
+        self.exclude = False
         self.noise = 0.0
 
     def __len__(self):
@@ -337,7 +341,7 @@ class Arrow_DS(Dataset):
         j = 2
         for i in range(8):
             if i != t:
-                x, _ = self.rand_sample(y, exclude=True)
+                x, _ = self.rand_sample(y, exclude=self.exclude)
                 x = self.transform(x)
                 pos_ij = self.digit_pos[i]
                 composites[:, :, pos_ij[0]:pos_ij[0]+32, pos_ij[1]:pos_ij[1]+32] = x * rgbs[j] + (1.0 - x) * b_rgb
