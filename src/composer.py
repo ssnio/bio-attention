@@ -801,6 +801,64 @@ class Popout_DS(Dataset):
         return composites, labels, masks, components, hot_labels
 
 
+class PatternedRecognition_DS(Dataset):
+    def __init__(self,
+                 mnist_dataset: Dataset,  # MNIST datasets
+                 n_iter: int,  # number of iterations
+                 noise: float = 0.25,  # noise scale
+                 ):
+        
+        super().__init__()
+        self.dataset = mnist_dataset
+        self.n_iter = n_iter
+        self.noise = noise
+        self.pad = 34
+        self.c, h, w = self.dataset[0][0].shape
+        self.h, self.w = self.pad + h + self.pad, self.pad + w + self.pad
+        self.patterns = Patterns(self.h, self.w)
+        self.transform = transforms.Compose([
+            transforms.Pad(self.pad),
+            transforms.RandomAffine(degrees=(-15, 15), translate=(0.3, 0.3), scale=(1.3, 1.5))])
+        self.occ_ratio = 0.0
+        self.n = 0
+
+    def build_valid_test(self):
+        self.noise = 0.0
+
+    def __len__(self):
+        return self.dataset.__len__()
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset.__getitem__(idx)
+        x = self.transform(x)
+        
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = 0
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter).long()
+        hot_labels = 0
+
+        # assignment
+        labels[:] = y
+        masks[:] = x
+
+        # get background and foreground
+        digit_color = torch.rand(3, 1, 1)
+        background_color = torch.rand(3, 1, 1)
+        background_color /= (background_color.max() + 1e-6) * 2
+        digit_color /= (digit_color.max() + 1e-6)
+        background = self.patterns.__getitem__(0)
+        composites[:] = (x * background) * digit_color + ((1.0 - x) * background) * background_color
+
+        self.occ_ratio += ((x * (1.0 - background)).sum() / x.sum())
+        self.n += 1
+
+        # adding noise and clamping 
+        composites, masks = routine_01(composites, masks, self.noise)
+
+        return composites, labels, masks, components, hot_labels
+
 class CelebACrop(Dataset):
     def __init__(self,
                  dataset: Dataset,
