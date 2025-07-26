@@ -1,0 +1,1 @@
+{"channels": [32, 64, 128, 256, 512], "fun": "GELU(approximate='none')", "in_dims": [3, 256, 256], "mid_dim": -1, "n_classes": 10, "n_tasks": 3, "norm": "layer", "out_dim": 10, "softness": 0.5, "task_fun": "Tanh()", "bnpti": false, "recurrent": false, "concat": true, "resnet": false}

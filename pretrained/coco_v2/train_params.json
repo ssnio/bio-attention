@@ -1,0 +1,1 @@
+{"n_epochs": 48, "batch_size": 64, "lr": 0.0005, "l2": 0.0001, "exase": "default", "dir": "./results", "milestones": [32, 40], "gamma": 0.2, "max_grad_norm": 10.0, "lr_min": 1e-05, "scheduler": "OneCycleLR", "optimizer": "Adam", "total_steps": 94864, "pct_start": 0.25}
