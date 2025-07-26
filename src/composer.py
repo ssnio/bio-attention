@@ -741,12 +741,14 @@ class Popout_DS(Dataset):
                  mnist_dataset: Dataset,  # MNIST datasets
                  n_iter: int,  # number of iterations
                  noise: float = 0.25,  # noise scale
+                 exclude: bool = True,  # whether to exclude the digit class from the random samples
                  ):
         
         super().__init__()
         self.dataset = mnist_dataset
         self.n_iter = n_iter
         self.noise = noise
+        self.exclude = exclude
         self.pad = 2
         self.h, self.w = 96, 96
         self.transform = transforms.Pad(self.pad)
@@ -763,11 +765,13 @@ class Popout_DS(Dataset):
             t.remove(y)
             cls = random.choice(t)
         else:
-            cls = y
+            # cls = y
+            cls = random.choice(list(range(10)))
         i = self.class_ids[cls][torch.randint(0, len(self.class_ids[cls]), (1, )).item()]
         return self.dataset.__getitem__(i)
 
     def build_valid_test(self):
+        self.exclude = False
         self.noise = 0.0
 
     def __len__(self):
@@ -792,7 +796,7 @@ class Popout_DS(Dataset):
         composites[:, :, pos_ij[0]:pos_ij[0]+32, pos_ij[1]:pos_ij[1]+32] = (x * rgbs[0]) + (1.0 - x) * b_rgb
         masks[:, :, pos_ij[0]:pos_ij[0]+32, pos_ij[1]:pos_ij[1]+32] += x
         
-        x, _ = self.rand_sample(y, exclude=True)
+        x, _ = self.rand_sample(y, exclude=self.exclude)
         x = self.transform(x)
         for i in self.index_pos:
             if i != t:
