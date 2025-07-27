@@ -160,8 +160,8 @@ def build_loaders(datasets: Dataset, batch_size: int, num_workers: int = 0, pin_
         batch_size=batch_size, 
         num_workers=num_workers,
         pin_memory=pin_memory,
-        persistent_workers=True,
-        prefetch_factor=2,
+        # persistent_workers=True,
+        # prefetch_factor=2,
         shuffle=True)
     valid_loader = DataLoader(
         val_ds, 
