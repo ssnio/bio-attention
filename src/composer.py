@@ -2900,6 +2900,7 @@ class Search_CIFAR(Dataset):
                  noise: float = 0.25,  # noise scale
                  in_dims: tuple = (3, 32, 32),  # image size
                  n_classes: int = 100,  # number of classes
+                 center: bool = False,
                  ):
         
         super().__init__()
@@ -2909,6 +2910,7 @@ class Search_CIFAR(Dataset):
         self.noise = noise
         self.in_dims = in_dims
         self.n_classes = n_classes
+        self.center = center
         self.k = 5
         self.s = 8.0
         _, self.hh, self.ww = in_dims # image size
@@ -2923,6 +2925,7 @@ class Search_CIFAR(Dataset):
         self.gaussian_grid = blur_edges(self.h, self.w, self.n_grid, self.n_grid, self.s).unsqueeze(0)
 
     def build_valid_test(self):
+        self.center = True
         self.transform = lambda x: x
         self.noise = 0.0
     
@@ -2938,6 +2941,13 @@ class Search_CIFAR(Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    def bring_one_front(self, x: torch.Tensor):
+        x = x.clone()
+        i = (x == self.n_grid + 1).nonzero().item()
+        x[i] = x[0]
+        x[0] = self.n_grid + 1
+        return x
+
     def __getitem__(self, idx: int):
         # pre-allocation
         composites = torch.zeros(self.n_iter, 3, self.h, self.w)
@@ -2948,6 +2958,7 @@ class Search_CIFAR(Dataset):
         
         set_target = True
         rand_ij = torch.randperm(self.n_grid * self.n_grid)
+        rand_ij = self.bring_one_front(rand_ij) if self.center else rand_ij
         for ij in rand_ij:
             i, j = ij // self.n_grid, ij % self.n_grid
             i_slice, j_slice = slice(i*self.hh, (i+1)*self.hh), slice(j*self.ww, (j+1)*self.ww)
@@ -2959,7 +2970,6 @@ class Search_CIFAR(Dataset):
                 masks[:, :, i_slice, j_slice] = 1.0
                 hot_labels[:, y] = 1.0
                 set_target = False
-                ti, tj = i, j
             else:
                 while True:
                     idx = torch.randint(len(self.dataset), (1,))
@@ -2969,6 +2979,12 @@ class Search_CIFAR(Dataset):
                 x = self.transform(x)
                 composites[:, :, i_slice, j_slice] = x
     
+        composites[:] = self.edge_blur(composites[:], self.gaussian_grid)
+        masks[:] = self.edge_blur(masks[:], self.gaussian_grid)
+
+        composites, masks = routine_01(composites, masks, self.noise)
+        return composites, labels, masks, components, hot_labels
+
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
