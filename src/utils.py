@@ -60,7 +60,7 @@ def plot_one(n, model_, dataloader_, key_, has_prompt_, directory, logger, prefi
     #         for j in range(p_y.size(2)):
     #             logger.info(f"  {i} {j}: {(torch.softmax(p_y[i, :, j].squeeze(), 0)*100).int()}")
     im_size = 2
-    n_items = max(composites.size(1), masks.size(1))
+    n_items = max(composites.size(1), masks.size(1)) if masks.ndim > 1 else composites.size(1)
     n = min(n, composites.size(0))
     plt.figure(figsize=(3 * n * im_size, n_items * im_size))
     for j in range(n):
