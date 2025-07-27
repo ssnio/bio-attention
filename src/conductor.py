@@ -560,18 +560,18 @@ class AttentionTrain:
         return eval_scores_
 
 
-    def eval_seq(self, device, kind, do_tasks = None):
+    def eval_seq(self, device, kind, do_tasks = None, output = False):
 
         if kind == "train":
             _loader = self.train_loaders
-            self.logger.info("train-eval...")
+            not output and self.logger.info("train-eval...")
         elif kind == "test":
             _loader = self.test_loaders
-            self.logger.info("testing...")
+            not output and self.logger.info("testing...")
         else :
             _loader = self.valid_loaders
-            self.logger.info("validating...")
-        
+            not output and self.logger.info("validating...")
+        the_py_list = []
         self.model.to(device)
         self.model.eval()
         with torch.no_grad():
@@ -592,19 +592,23 @@ class AttentionTrain:
                         for i in range(n):
                             ni = i if i < n_ else -1
                             p_m, p_y, a_ = self.model.one_forward(x[:, ni], task_id, hy[:, ni] if has_prompt else None)
+                            whatwewant = p_y.clone().softmax(dim=-1)
+                            the_py_list.append(whatwewant[torch.arange(whatwewant.size(0)), y[:, ni]].cpu())
                             prediction = p_y.argmax(dim=1, keepdim=True)
                             eval_scores[i][0] += cross_entropy(p_y, y[:, ni], class_weights, reduction='sum').item() if y.ndim > 1 else 0.0
                             eval_scores[i][1] += pixel_error(p_m, m[:, ni]).item() * b_ if m.ndim > 1 else 0.0
                             eval_scores[i][2] += normed_acc(p_m, m[:, ni]).item() * b_ if m.ndim > 1 else 0.0
                             eval_scores[i][3] += prediction.eq(y[:, ni].view_as(prediction)).sum().item() if y.ndim > 1 else 0
-
-                    self.logger.info(f"  Task {k}:")
-                    n_samples = _loader[j].dataset.__len__()
-                    for i in range(n):
-                        self.logger.info(f"    CEi Loss: {eval_scores[i][0]/n_samples:.3f}"
-                                         f"    Pix Err: {eval_scores[i][1]/n_samples:.3f}"
-                                         f"    Att Acc: {eval_scores[i][2]/n_samples:.3f}"
-                                         f"    Cls Acc: {eval_scores[i][3]}/{n_samples}")
+                    if not output:
+                        self.logger.info(f"  Task {k}:")
+                        n_samples = _loader[j].dataset.__len__()
+                        for i in range(n):
+                            self.logger.info(f"    CEi Loss: {eval_scores[i][0]/n_samples:.3f}"
+                                            f"    Pix Err: {eval_scores[i][1]/n_samples:.3f}"
+                                            f"    Att Acc: {eval_scores[i][2]/n_samples:.3f}"
+                                            f"    Cls Acc: {eval_scores[i][3]}/{n_samples}")
+        if output:
+            return eval_scores, the_py_list
 
     def confuse(self, classes: torch.Tensor, preds: torch.Tensor, kind: int = 0):
         if self.confusion_matrix is None:
