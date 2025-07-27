@@ -98,6 +98,7 @@ class Block(torch.nn.Module):
                  bsingle: bool = False,
                  residual: bool = False,
                  concat: bool = True,
+                 resnet: bool = True,
                  ):
         super().__init__()
         self.fun = fun
@@ -108,17 +109,18 @@ class Block(torch.nn.Module):
         self.post_conv_norm = makenorm(norm, out_channels)
         self.post_deconv_norm = makenorm(norm, in_channels)
         self.ncu = 2 if concat else 1
+        self.resnet = resnet
         if ds:
             self.downsample = torch.nn.Sequential(
                torch.nn.Conv2d(in_channels, out_channels, 1, 2, 0, bias=bias),
                 makenorm(norm, out_channels)
-            )
+            ) if self.resnet else None
             self.upsample = torch.nn.Sequential(
                 torch.nn.Upsample(scale_factor=2),
                 makenorm(norm, self.ncu * out_channels)
             )
         else:
-            self.downsample = torch.nn.Identity()
+            self.downsample = torch.nn.Identity() if self.resnet else None
             self.upsample = torch.nn.Identity()
         if residual:
             self.deconv_res = torch.nn.Sequential(
@@ -159,10 +161,10 @@ class Block(torch.nn.Module):
         return self.fforward(x)
 
     def fforward(self, x: torch.Tensor):
-        identity = self.downsample(x)
+        identity = self.downsample(x) if self.resnet else None
         x = self.conv(x)
-        x += identity
-        x = self.post_conv_norm(x)
+        x = (x + identity) if self.resnet else x
+        x = self.post_conv_norm(x) if self.resnet else x
         x = self.fun(x)
         return x
 
@@ -195,6 +197,7 @@ class AttentionModel(torch.nn.Module):
                  reinit: bool = False,
                  recurrent: bool = False,
                  concat: bool = True,
+                 resnet: bool = True,
                  ):
         
         super().__init__()
@@ -215,12 +218,18 @@ class AttentionModel(torch.nn.Module):
         self.reinit = reinit
         self.recurrent = recurrent
         self.concat = concat
+        self.resnet = resnet
         self.ncu = 2 if self.concat else 1
         self.first_k, self.first_p = first_k, (first_k - 1)//2
         self.map_dims = [(1, self.in_dims[1], self.in_dims[2])]
-        self.normalize = Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        if self.in_dims[0] == 3:
+            self.normalize = Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        elif self.in_dims[0] == 1:
+            self.normalize = Normalize([0.5], [0.25])
+        else:
+            raise ValueError(f"Invalid input dimensions: {self.in_dims[0]} channels! Only 1 or 3 channels are supported.")
         self.first_conv = torch.nn.Sequential(
-            torch.nn.Conv2d(3, self.channels[0], self.first_k, 2, self.first_p, bias=bias),
+            torch.nn.Conv2d(self.in_dims[0], self.channels[0], self.first_k, 2, self.first_p, bias=bias),
             makenorm(self.norm, self.channels[0]),
             self.fun,
             torch.nn.Identity() if skip_maxpool else torch.nn.MaxPool2d(3, 2, 1)
@@ -229,7 +238,7 @@ class AttentionModel(torch.nn.Module):
         self.map_dims.append((self.channels[0], h, w))
         self.blocks = torch.nn.ModuleList()
         for in_c, out_c in zip(self.channels[:-1], self.channels[1:]):
-            self.blocks.append(Block(in_c, out_c, self.norm, self.fun, residual=self.residual, concat=self.concat))
+            self.blocks.append(Block(in_c, out_c, self.norm, self.fun, residual=self.residual, concat=self.concat, resnet=self.resnet))
             self.map_dims.append(get_dims(self.map_dims[-1], out_c))
         self.last_deconv = torch.nn.Sequential(
             torch.nn.Upsample(scale_factor=2 if skip_maxpool else 4),
@@ -299,28 +308,28 @@ class AttentionModel(torch.nn.Module):
     #             a.downsample.requires_grad_(state)
     #             a.conv.requires_grad_(state)
 
-    def set_task_iter_batch(self, device, t, i):
-        j = 0
-        for a in self.modules():
-            if isinstance(a, torch.nn.BatchNorm2d):
-                if a.running_mean is not None and a.running_var is not None:
-                    if f"{t}_{i}_{j}" not in self.bmv_stuff:
-                        self.bmv.register_buffer(f"{t}_{i}_{j}_rm", torch.zeros(a.num_features).to(device))
-                        self.bmv.register_buffer(f"{t}_{i}_{j}_rv", torch.ones(a.num_features).to(device))
-                        self.bmv_stuff.append(f"{t}_{i}_{j}")
-                    a.running_mean = self.bmv.get_buffer(f"{t}_{i}_{j}_rm")
-                    a.running_var = self.bmv.get_buffer(f"{t}_{i}_{j}_rv")
-                    j += 1
+    # def set_task_iter_batch(self, device, t, i):
+    #     j = 0
+    #     for a in self.modules():
+    #         if isinstance(a, torch.nn.BatchNorm2d):
+    #             if a.running_mean is not None and a.running_var is not None:
+    #                 if f"{t}_{i}_{j}" not in self.bmv_stuff:
+    #                     self.bmv.register_buffer(f"{t}_{i}_{j}_rm", torch.zeros(a.num_features).to(device))
+    #                     self.bmv.register_buffer(f"{t}_{i}_{j}_rv", torch.ones(a.num_features).to(device))
+    #                     self.bmv_stuff.append(f"{t}_{i}_{j}")
+    #                 a.running_mean = self.bmv.get_buffer(f"{t}_{i}_{j}_rm")
+    #                 a.running_var = self.bmv.get_buffer(f"{t}_{i}_{j}_rv")
+    #                 j += 1
 
-    def get_task_iter_batch(self, device, t, i):
-        j = 0
-        for a in self.modules():
-            if isinstance(a, torch.nn.BatchNorm2d):
-                if a.training:
-                    if f"{t}_{i}_{j}" in self.bmv_stuff:
-                        self.bmv.__setattr__(f"{t}_{i}_{j}_rm", a.running_mean)
-                        self.bmv.__setattr__(f"{t}_{i}_{j}_rv", a.running_var)
-                        j += 1
+    # def get_task_iter_batch(self, device, t, i):
+    #     j = 0
+    #     for a in self.modules():
+    #         if isinstance(a, torch.nn.BatchNorm2d):
+    #             if a.training:
+    #                 if f"{t}_{i}_{j}" in self.bmv_stuff:
+    #                     self.bmv.__setattr__(f"{t}_{i}_{j}_rm", a.running_mean)
+    #                     self.bmv.__setattr__(f"{t}_{i}_{j}_rv", a.running_var)
+    #                     j += 1
 
     def prepare_task(self, t: int, batch_size: int, device):
         t = torch.tensor([t]).to(device).expand(batch_size).contiguous()
@@ -355,7 +364,6 @@ class AttentionModel(torch.nn.Module):
             th = None
         if y is not None:
             y = y.permute(1, 0, 2).contiguous()
-        t4bnpti = t if isinstance(t, int) else t[0].item() if t is not None else 0
 
         # initialization
         self.initiate_forward(batch_size)
@@ -364,7 +372,6 @@ class AttentionModel(torch.nn.Module):
         masks_, act_, labels_ = self.pre_allocation(n_iter, batch_size, device)
 
         for r in range(n_iter):  # Recurrent
-            self.set_task_iter_batch(device, t4bnpti, r) if self.bnpti else None
             h = self.normalize(x[r])
             
             h = h * (1.0 + self.softness * self.masks[f"mask_{0}"])
@@ -374,7 +381,8 @@ class AttentionModel(torch.nn.Module):
             # convolutional layers
             for i, b_ in enumerate(self.blocks):
                 h = h * (1.0 + self.softness * self.masks[f"mask_{i+1}"])
-                h = b_.pre_conv_norm(h) if r > 0 else h
+                # h = b_.pre_conv_norm(h) if r > 0 else h
+                h = b_.pre_conv_norm(h)# if r > 0 else h
                 h = b_.fforward(h)
                 act_[i+1][r] = h
 
@@ -402,7 +410,6 @@ class AttentionModel(torch.nn.Module):
                 self.masks[f"mask_{len(self.blocks) - i}"] = h = b_.bforward(h)
             h = torch.cat([h, act_[0][r]], 1) if self.concat else (h + act_[0][r])
             masks_[r] = self.masks["mask_0"] = self.last_deconv(h)
-            self.get_task_iter_batch(device, t4bnpti, r) if self.bnpti else None
             
         # post-processing
         labels_ = labels_.permute(1, 2, 0).contiguous()
@@ -422,8 +429,6 @@ class AttentionModel(torch.nn.Module):
         for m in self.map_dims[1:]:
             act_.append(torch.empty(batch_size, *m).to(device))
 
-        t4bnpti = t if isinstance(t, int) else t[0].item() if t is not None else 0
-        self.set_task_iter_batch(device, t4bnpti, r) if self.bnpti else None
         h = self.normalize(x)
         
         h = h * (1.0 + self.softness * self.masks[f"mask_{0}"])
@@ -444,6 +449,58 @@ class AttentionModel(torch.nn.Module):
         # bottleneck
         h = self.fbottleneck(h)
         labels_ = h[:, :self.n_classes]
-        self.get_task_iter_batch(device, t4bnpti, r) if self.bnpti else None
         
         return labels_, act_
+
+    def one_forward(self, x: torch.Tensor, t: int = None, y: torch.Tensor = None):
+        assert x.dim() == 4, "Input tensor should be 4D: B x C x H x W"
+        
+        # pre-processing
+        device = next(self.parameters()).device
+        batch_size = x.size(0)
+        if t is not None and self.n_tasks > 1:
+            t, th = self.prepare_task(t, batch_size, device)
+        else:
+            th = None
+
+        # pre-allocation
+        act_ = []  # forward activation
+    
+        h = self.normalize(x)
+        h = h * (1.0 + self.softness * self.masks[f"mask_{0}"])
+        h = self.first_conv(h)
+        act_.append(h)
+        
+        # convolutional layers
+        for i, b_ in enumerate(self.blocks):
+            h = h * (1.0 + self.softness * self.masks[f"mask_{i+1}"])
+            h = b_.pre_conv_norm(h)
+            h = b_.fforward(h)
+            act_.append(h)
+
+        # bottleneck
+        h = self.fmid(h)
+        h = self.frnn(h, self.hstates["fh"]) if self.recurrent else self.frnn(h)
+        h = self.fbottleneck(h)
+        labels_ = h[:, :self.n_classes]
+        h = h if y is None else torch.cat([y, h[:, self.n_classes:]], dim=1)
+        h = h if t is None else torch.cat([h, th], 1) if self.n_tasks > 1 else h
+        h = self.bbottleneck(h)
+        h = self.brnn(h, self.hstates["bh"]) if self.recurrent else self.brnn(h)
+        h = self.bmid(h)
+        h = h.repeat(1, 1, self.map_dims[-1][1], self.map_dims[-1][2])
+
+        # backward # deconvolutional
+        h = torch.cat([h, act_[-1]], 1) if self.concat else (h + act_[-1])
+        if self.n_tasks > 1:
+            a = self.task_w(t).unsqueeze(-1).unsqueeze(-1)
+            b = self.task_b(t).unsqueeze(-1).unsqueeze(-1)
+            h = self.task_fun(a * h + b)
+        
+        for i, b_ in enumerate(self.blocks[::-1]):
+            h = (torch.cat([h, act_[-i-1]], 1) if self.concat else (h + act_[-i-1])) if i > 0 else h
+            self.masks[f"mask_{len(self.blocks) - i}"] = h = b_.bforward(h)
+        h = torch.cat([h, act_[0]], 1) if self.concat else (h + act_[0])
+        masks_ = self.masks["mask_0"] = self.last_deconv(h)
+
+        return masks_, labels_, act_
