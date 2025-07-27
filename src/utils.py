@@ -60,24 +60,24 @@ def plot_one(n, model_, dataloader_, key_, has_prompt_, directory, logger, prefi
     #         for j in range(p_y.size(2)):
     #             logger.info(f"  {i} {j}: {(torch.softmax(p_y[i, :, j].squeeze(), 0)*100).int()}")
     im_size = 2
-    n_iter = composites.size(1)
+    n_items = max(composites.size(1), masks.size(1))
     n = min(n, composites.size(0))
-    plt.figure(figsize=(3 * n * im_size, n_iter * im_size))
+    plt.figure(figsize=(3 * n * im_size, n_items * im_size))
     for j in range(n):
-        for i in range(n_iter):
-            plt.subplot(n_iter, 3 * n, 1 + i * 3 * n + j * 3)
+        for i in range(composites.size(1)):
+            plt.subplot(n_items, 3 * n, 1 + i * 3 * n + j * 3)
             if composites.size(2) == 1:
-                plt.imshow(composites[j, i, 0], cmap="gray")
+                plt.imshow(composites[j, i, 0], cmap="gray", vmin=0, vmax=1)
             else:
                 plt.imshow(composites[j, i].permute(1, 2, 0))
             plt.axis("off")
-        for i in range(n_iter):
-            plt.subplot(n_iter, 3 * n, 2 + i * 3 * n + j * 3)
+        for i in range(composites.size(1)):
+            plt.subplot(n_items, 3 * n, 2 + i * 3 * n + j * 3)
             plt.imshow(p_masks[j, i][0], cmap="plasma", vmin=-1, vmax=1)
             plt.axis("off")
         if masks.ndim > 1:
             for i in range(masks.size(1)):
-                plt.subplot(n_iter, 3 * n, 3 + i * 3 * n + j * 3)
+                plt.subplot(n_items, 3 * n, 3 + i * 3 * n + j * 3)
                 plt.imshow(masks[j, i][0], cmap="plasma", vmin=-1, vmax=1)
                 plt.axis("off")
     plt.tight_layout()
