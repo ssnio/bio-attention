@@ -2986,6 +2986,101 @@ class Search_CIFAR(Dataset):
         return composites, labels, masks, components, hot_labels
 
         composites, masks = routine_01(composites, masks, self.noise)
+
+class Broken_CIFAR(Dataset):
+    def __init__(self,
+                 cifar_dataset: Dataset,  # CIFAR datasets
+                 n_iter: int,  # number of fixate and attend iterations
+                 gap: int = 4,
+                 in_dims: tuple = (3, 32, 32),
+                 out_dims: tuple = (3, 96, 96),
+                 noise: float = 0.25,  # noise scale
+                 hard: bool = False,
+                 natural: bool = False,
+                 center: bool = False,
+                 ):
+        
+        super().__init__()
+        self.train = True
+        self.dataset = cifar_dataset
+        self.n_iter = n_iter
+        self.gap = gap
+        self.noise = noise
+        _, self.h, self.w = out_dims
+        _, self.hh, self.ww = in_dims  # image size
+        self.hard = hard
+        self.natural = natural
+        self.center = center
+        self.n = 2
+        assert self.hh%self.n == 0 and self.ww%self.n == 0, 'Image size must be divisible by n_pieces!'
+        self.zh, self.zw = self.hh//self.n, self.ww//self.n
+        self.fh, self.fw = self.h//self.n, self.w//self.n
+        self.sh, self.sw = self.zh//self.n, self.zw//self.n
+        self.flip = transforms.RandomHorizontalFlip(p=0.5)
+        self.trans = transforms.Compose([
+                transforms.RandomGrayscale(p=0.5),
+                transforms.ColorJitter(brightness=(0.8, 1.8), saturation=(0.8, 1.2), hue=(-0.2, 0.2)),
+                transforms.RandomAutocontrast(p=0.5),
+            ])
+        self.fold = torch.nn.Fold(output_size=(self.h, self.w), kernel_size=(self.sh, self.sw), stride=(self.sh, self.sw))
+
+    def scatter(self) -> torch.Tensor:
+        n = 3 * 3
+        s = 4 * 4
+        z = torch.zeros(3, self.sh, self.sw, n * s)
+        # k, _ = self.dataset[torch.randint(len(self.dataset), (1, ))]
+        for j in range(n):
+            # x = k if self.hard else self.dataset[torch.randint(len(self.dataset), (1, ))][0]
+            x = self.dataset[torch.randint(len(self.dataset), (1, ))][0]
+            x = self.trans(x)
+            z[:, :, :, s*j:s*(j+1)] = x.unfold(1, self.sh, self.sh).unfold(2, self.sw, self.sw).reshape(3, -1, self.sh, self.sw).permute(0, 2, 3, 1)
+        z = z[None, :, :, :, torch.randperm(n * s)]
+        z = z.view(1, 3*self.sh*self.sw, n * s)
+        return self.fold(z)[0]
+
+    def build_valid_test(self):
+        self.center = True
+        self.hard = False
+        self.train = False
+        self.trans = lambda x: x
+        self.flip = lambda x: x
+        self.noise = 0.0
+        self.gap = 0
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+        # pre-allocation
+        z = natural_noise(self.h, self.w) if self.natural else self.scatter()
+        composites = torch.zeros(max(self.n_iter, 1), 3, self.h, self.w)
+        labels = torch.zeros(max(self.n_iter, 1)).long()
+        masks = 0
+        components = 0
+        hot_labels = 0
+
+        labels[:] = y
+        x = self.flip(x)
+        x = self.trans(x) if not self.hard else x
+        g = torch.randint(1, self.gap + 1, (1, )).item() if self.gap > 0 else 0
+        fh, zh, fw, zw = self.fh, self.zh, self.fw, self.zw
+        oi = 0 if self.center else torch.randint(-(fh-zh)+g, (fh-zh)-g, (1, ))
+        oj = 0 if self.center else torch.randint(-(fw-zw)+g, (fw-zw)-g, (1, ))
+        z[:, fh-zh-g+oi:fh-g+oi, fw-zw-g+oj:fw-g+oj] = self.trans(x[:, :zh, :zw]) if self.hard else x[:, :zh, :zw]
+        z[:, fh-zh-g+oi:fh-g+oi, fw+g+oj:fw+zw+g+oj] = self.trans(x[:, :zh, -zw:]) if self.hard else x[:, :zh, -zw:]
+        z[:, fh+g+oi:fh+zh+g+oi, fw-zw-g+oj:fw-g+oj] = self.trans(x[:, -zh:, :zw]) if self.hard else x[:, -zh:, :zw]
+        z[:, fh+g+oi:fh+zh+g+oi, fw+g+oj:fw+zw+g+oj] = self.trans(x[:, -zh:, -zw:]) if self.hard else x[:, -zh:, -zw:]
+        composites[:] = z
+
+        composites += torch.rand(1) * self.noise * torch.rand_like(composites)
+        composites = torch.clamp(composites, 0.0, 1.0)
+
+        if self.n_iter == 0:
+            return composites[0], labels[0]
+        else:
+            return composites, labels, masks, components, hot_labels
+
         return composites, labels, masks, components, hot_labels
 
 
