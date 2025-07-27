@@ -1290,12 +1290,14 @@ class PerceptualGrouping_COCO(Dataset):
     def __init__(self,
                  coco_dataset: COCOAnimals,
                  fix_attend: tuple,
-                 noise: float = 0.25,):
+                 noise: float = 0.25,
+                 natural: bool = False):
         
         super().__init__()
         self.kind = "train"
+        self.natural = natural
         assert len(fix_attend) == 2
-        self.k = 3
+        self.k = 5
         self.dataset = coco_dataset  # COCO datasets
         self.h, self.w = coco_dataset.h, coco_dataset.w
         self.dataset._get_triplets()
@@ -1344,7 +1346,7 @@ class PerceptualGrouping_COCO(Dataset):
         hot_labels = 0
 
         # assignments
-        composites[:self.fixate] = p
+        composites[:self.fixate] = p + (natural_noise(self.h, self.w) if self.natural else 0.0)
         masks[:self.fixate] = p
         composites[self.fixate:] = x
         masks[self.fixate:] = m
