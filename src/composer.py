@@ -2524,7 +2524,9 @@ class Cued_CIFAR(Dataset):
                  fix_attend: tuple,  # number of fixate and attend iterations
                  n_grid: int = 3,  # image size
                  noise: float = 0.25,  # noise scale
-                 in_dims: tuple = (3, 32, 32)
+                 in_dims: tuple = (3, 32, 32),
+                 roll: bool = True,
+                 center: bool = False,
                  ):
         
         super().__init__()
@@ -2533,6 +2535,8 @@ class Cued_CIFAR(Dataset):
         self.n_iter = sum(fix_attend)
         self.n_grid = n_grid
         self.noise = noise
+        self.roll = roll
+        self.center = center
         self.k = 5
         self.s = 8.0
         _, self.hh, self.ww = in_dims # image size
@@ -2549,9 +2553,18 @@ class Cued_CIFAR(Dataset):
         self.gaussian_grid = blur_edges(self.h, self.w, self.n_grid, self.n_grid, self.s).unsqueeze(0)
 
     def build_valid_test(self):
+        self.center = True
+        self.roll = False
         self.transform = lambda x: x
         self.noise = 0.0
     
+    def bring_one_front(self, x: torch.Tensor):
+        x = x.clone()
+        i = (x == 0).nonzero().item()
+        x[i] = x[self.n_grid + 1]
+        x[self.n_grid + 1] = 0
+        return x
+
     def edge_blur(self, x: torch.Tensor, gg: torch.Tensor):
         y = self.blur(x)
         return x * gg + y * (1.0 - gg)
@@ -2564,6 +2577,7 @@ class Cued_CIFAR(Dataset):
     def sample_n_shuffle(self, t: torch.Tensor) -> torch.Tensor:
         n = self.n_grid * self.n_grid
         o = torch.randperm(n)
+        o = self.bring_one_front(o) if self.center else o
         z = torch.zeros(3, self.hh, self.ww, n)
         z[:, :, :, 0] = t
         for j in range(1, n):
@@ -2599,11 +2613,12 @@ class Cued_CIFAR(Dataset):
         masks[:self.fixate, :, i_slice, j_slice] = self.cue
         masks[self.fixate:, :, i_slice, j_slice] = 1.0
             
-        si, sj = self.get_roll(i, j)
+        si, sj = self.get_roll(i, j) if self.roll else (0, 0)
         composites[:] = torch.roll(composites[:], shifts=(si, sj), dims=(-2, -1))
         masks[:] = torch.roll(masks[:], shifts=(si, sj), dims=(-2, -1))
         gg = torch.roll(self.gaussian_grid, shifts=(si, sj), dims=(-2, -1))
         composites[self.fixate:] = self.edge_blur(composites[self.fixate:], gg)
+        masks[self.fixate:] = self.edge_blur(masks[self.fixate:], gg)
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
