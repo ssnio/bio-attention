@@ -198,6 +198,7 @@ class AttentionModel(torch.nn.Module):
                  recurrent: bool = False,
                  concat: bool = True,
                  resnet: bool = True,
+                 norm_1st: bool = False,
                  ):
         
         super().__init__()
@@ -219,6 +220,7 @@ class AttentionModel(torch.nn.Module):
         self.recurrent = recurrent
         self.concat = concat
         self.resnet = resnet
+        self.norm_1st = norm_1st
         self.ncu = 2 if self.concat else 1
         self.first_k, self.first_p = first_k, (first_k - 1)//2
         self.map_dims = [(1, self.in_dims[1], self.in_dims[2])]
@@ -272,64 +274,10 @@ class AttentionModel(torch.nn.Module):
             self.task_b = torch.torch.nn.Embedding(self.n_tasks, self.ncu * self.channels[-1])
             torch.nn.init.zeros_(self.task_b.weight)
 
-        # if self.reinit:
-        #     for m in self.modules():
-        #         if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.ConvTranspose2d):
-        #             torch.nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-        #             # if isinstance(self.fun, torch.nn.ReLU):
-        #             #     torch.nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-        #             # else:
-        #             #     torch.nn.init.xavier_normal_(m.weight, gain=0.1)
-        #         elif isinstance(m, (torch.nn.BatchNorm2d, torch.nn.GroupNorm)):
-        #             torch.nn.init.constant_(m.weight, 1)
-        #             torch.nn.init.constant_(m.bias, 0)
-
-            # Zero-initialize the last BN in each residual branch,
-            # so that the residual branch starts with zeros, and each residual block behaves like an identity.
-            # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
-            # for m in self.modules():
-            #     if isinstance(m, Block) and m.conv[-1].weight is not None:
-            #         torch.nn.init.constant_(m.conv[-1].weight, 0)  # type: ignore[arg-type]
-            #     elif isinstance(m, Block) and m.deconv[-1].weight is not None:
-            #         torch.nn.init.constant_(m.deconv[-1].weight, 0)  # type: ignore[arg-type]
-
         self.masks = {}
         self.hstates = {}
         self.bmv = torch.nn.ModuleDict()
         self.bmv_stuff = []
-
-    # def toggle_forward(self, state: bool):
-    #     self.first_conv.requires_grad_(state)
-    #     self.fmid.requires_grad_(state)
-    #     self.fbottleneck.requires_grad_(state)
-
-    #     for a in self.modules():
-    #         if isinstance(a, Block):
-    #             a.downsample.requires_grad_(state)
-    #             a.conv.requires_grad_(state)
-
-    # def set_task_iter_batch(self, device, t, i):
-    #     j = 0
-    #     for a in self.modules():
-    #         if isinstance(a, torch.nn.BatchNorm2d):
-    #             if a.running_mean is not None and a.running_var is not None:
-    #                 if f"{t}_{i}_{j}" not in self.bmv_stuff:
-    #                     self.bmv.register_buffer(f"{t}_{i}_{j}_rm", torch.zeros(a.num_features).to(device))
-    #                     self.bmv.register_buffer(f"{t}_{i}_{j}_rv", torch.ones(a.num_features).to(device))
-    #                     self.bmv_stuff.append(f"{t}_{i}_{j}")
-    #                 a.running_mean = self.bmv.get_buffer(f"{t}_{i}_{j}_rm")
-    #                 a.running_var = self.bmv.get_buffer(f"{t}_{i}_{j}_rv")
-    #                 j += 1
-
-    # def get_task_iter_batch(self, device, t, i):
-    #     j = 0
-    #     for a in self.modules():
-    #         if isinstance(a, torch.nn.BatchNorm2d):
-    #             if a.training:
-    #                 if f"{t}_{i}_{j}" in self.bmv_stuff:
-    #                     self.bmv.__setattr__(f"{t}_{i}_{j}_rm", a.running_mean)
-    #                     self.bmv.__setattr__(f"{t}_{i}_{j}_rv", a.running_var)
-    #                     j += 1
 
     def prepare_task(self, t: int, batch_size: int, device):
         t = torch.tensor([t]).to(device).expand(batch_size).contiguous()
@@ -381,8 +329,8 @@ class AttentionModel(torch.nn.Module):
             # convolutional layers
             for i, b_ in enumerate(self.blocks):
                 h = h * (1.0 + self.softness * self.masks[f"mask_{i+1}"])
-                # h = b_.pre_conv_norm(h) if r > 0 else h
-                h = b_.pre_conv_norm(h)# if r > 0 else h
+                h = b_.pre_conv_norm(h) if r > 0 or self.norm_1st else h
+                # h = b_.pre_conv_norm(h)# if r > 0 else h
                 h = b_.fforward(h)
                 act_[i+1][r] = h
 
