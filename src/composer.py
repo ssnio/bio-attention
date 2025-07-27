@@ -2985,7 +2985,6 @@ class Search_CIFAR(Dataset):
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
-        composites, masks = routine_01(composites, masks, self.noise)
 
 class Broken_CIFAR(Dataset):
     def __init__(self,
