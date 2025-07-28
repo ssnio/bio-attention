@@ -3238,6 +3238,92 @@ class ShapeSearch_MM(Dataset):
         composites, masks = routine_01(composites, masks, self.noise)
         return composites, labels, masks, components, hot_labels
 
+
+class ShapeRecognition_MM(Dataset):
+    def __init__(self,
+                 n_grid: int = 4,  # image size
+                 n_iter: int = 3,  # number of iterations
+                 noise: float = 0.25,  # noise level
+                 directory: str = r"./data",  # directory of shapes
+                 hard: bool = False,
+                 ):
+        super().__init__()
+
+        self.train = True
+        self.directory = os.path.join(directory, "shapes")
+        self.n_mods = 3  # number of modalities
+        self.dh, self.dw = 64, 64  # shape size
+        self.shapes = Shapes(self.directory, self.dh, self.dw)
+        self.colors = Colors(0.25)
+        self.textures = Textures(self.dh, self.dw)
+        self.n_grid = n_grid
+        self.n_iter = n_iter
+        self.noise = noise
+        self.hard = hard
+        self.n_shapes = len(self.shapes)
+        self.n_colors = len(self.colors)
+        self.n_textures = len(self.textures)
+        self.len_mods = (self.n_shapes, self.n_colors, self.n_textures)  # number of classes per modality
+        self.n_classes = sum(self.len_mods)
+        self.h, self.w = self.n_grid * self.dh, self.n_grid * self.dw
+        self.transform = transforms.RandomRotation(360)
+
+    def pick_target(self):
+        t_s = torch.randint(0, self.n_shapes, (1, ))
+        t_c = torch.randint(0, self.n_colors, (1, ))
+        t_t = torch.randint(0, self.n_textures, (1, ))
+        if self.train and t_s == t_c and t_t == t_s: 
+            if t_t.item() == 0:
+                t_t = torch.randint(1, self.n_textures, (1, ))
+            elif t_c.item() == 1:
+                t_c = torch.randint(2, self.n_colors, (1, ))
+            else:
+                t_s = torch.randint(3, self.n_shapes, (1, ))
+        elif self.hard and not self.train:
+            r = torch.randint(0, 3, (1, ))
+            t_s, t_c, t_t = r, r, r
+        return t_s, t_c, t_t
+
+    def get_dyct(self, i, c, t):
+        s_ = self.shapes[i]
+        t_ = self.textures[t]
+        c_ = self.colors[c]
+        m = x = self.transform(s_)
+        x = x * t_
+        x = x * c_
+        return x, m, s_, c_, t_
+
+    def build_valid_test(self):
+        self.noise = 0.0
+        self.colors.noise = 0.0
+        self.train = False
+        self.transform = lambda x: x
+
+    def __len__(self):
+        return (self.n_classes * 1024) if self.train else (self.n_classes * 128)
+
+    def __getitem__(self, d: int):
+        t_s, t_c, t_t = self.pick_target()
+        x, m, shape, color, texture = self.get_dyct(t_s, t_c, t_t)
+
+        # pre-allocation
+        composites = torch.zeros(self.n_iter, 3, self.h, self.w)
+        components = 0
+        masks = torch.zeros(self.n_iter, 1, self.h, self.w)
+        labels = torch.zeros(self.n_iter, self.n_mods).long()  # (n_iter, n_modalities)
+        hot_labels = 0
+        background = torch.rand(3, self.h, self.w)
+
+        i, j = torch.randint(0, self.h-self.dh, (1, )), torch.randint(0, self.w-self.dw, (1, ))
+        h_s, w_s = slice(i, i+self.dh), slice(j, j+self.dw)
+        composites[:] = background
+        composites[:, :, h_s, w_s] = x + background[:, h_s, w_s] * (1.0 - m)
+        masks[:, :, h_s, w_s] = m
+        labels[:, 0], labels[:, 1], labels[:, 2] = t_s, t_c, t_t
+        composites, masks = routine_01(composites, masks, self.noise)
+
+        return composites, labels, masks, components, hot_labels
+
                  noise: float = 0.25,  # noise level
                  hard: bool = False,
                  ext: bool = True,
