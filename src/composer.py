@@ -3083,7 +3083,6 @@ class Broken_CIFAR(Dataset):
         return composites, labels, masks, components, hot_labels
 
 
-class ShapeRecognition_FBG(Dataset):
 class Shapes(Dataset):
     def __init__(self,
                  directory: str,
@@ -3304,6 +3303,7 @@ class ShapeRecognition_MM(Dataset):
 
     def __getitem__(self, d: int):
         t_s, t_c, t_t = self.pick_target()
+        background = self.pick_hard_background(t_c, t_t) if self.superhard else self.pick_background(t_c, t_t)
         x, m, shape, color, texture = self.get_dyct(t_s, t_c, t_t)
 
         # pre-allocation
@@ -3324,19 +3324,27 @@ class ShapeRecognition_MM(Dataset):
 
         return composites, labels, masks, components, hot_labels
 
+
+class ShapeRecognition_FBG(Dataset):
+    def __init__(self,
+                 n_iter: int = 3,  # number of iterations
+                 directory: str = r"./data",  # directory of shapes
                  noise: float = 0.25,  # noise level
                  hard: bool = False,
                  ext: bool = True,
                  empty: bool = False,
                  invert: bool = False,
+                 random: bool = False,
+                 superhard: bool = False,
+                 background: bool = True,
                  ):
         super().__init__()
-
         self.train = True
+        self.random = random
         self.directory = os.path.join(directory, "shapes")
         self.n_mods = 3  # number of modalities
         self.h, self.w = 128, 128
-        self.shapes = Shapes(self.directory, 64, 64, pre_pad=0, post_pad=32)
+        self.shapes = ManyShapes() if random else Shapes(self.directory, 64, 64, pre_pad=0, post_pad=32)
         self.colors = Colors(0.25)
         self.fg_textures = Textures(self.h, self.w, ext=ext)
         self.bg_textures = Textures(self.h, self.w, ext=ext)
@@ -3345,7 +3353,9 @@ class ShapeRecognition_MM(Dataset):
         self.hard = hard
         self.empty = empty
         self.invert = invert
-        self.n_shapes = len(self.shapes)
+        self.superhard = superhard
+        self.background = background
+        self.n_shapes = 9 if self.random else len(self.shapes)
         self.n_colors = len(self.colors)
         self.n_fg_textures = len(self.fg_textures)
         self.n_bg_textures = len(self.bg_textures)
@@ -3379,6 +3389,23 @@ class ShapeRecognition_MM(Dataset):
         c_ = self.colors[b_c]
         return t_ * c_
 
+    def pick_hard_background(self, t_c, t_t):
+        if torch.rand(()) < 0.5:
+            b_c = t_c
+            while True:
+                b_t = torch.randint(0, self.n_bg_textures, (1, ))
+                if b_t != t_t:
+                    break
+        else:
+            b_t = t_t
+            while True:
+                b_c = torch.randint(0, self.n_colors, (1, ))
+                if b_c != t_c:
+                    break
+        t_ = self.fg_textures[b_t]
+        c_ = self.colors[b_c]
+        return t_ * c_
+
     def get_dyct(self, i, c, t):
         s_ = self.shapes[i]
         t_ = self.fg_textures[t]
@@ -3407,12 +3434,11 @@ class ShapeRecognition_MM(Dataset):
         masks = torch.zeros(self.n_iter, 1, self.h, self.w)
         labels = torch.zeros(self.n_iter, self.n_mods).long()  # (n_iter, n_modalities)
         hot_labels = 0
-        background = self.pick_background(t_c, t_t)
 
         # composites[:] = background
-        composites[:] = (0.0 if self.invert else x) + (background * (1.0 - m) if not self.empty else 0.0)
+        composites[:] = (0.0 if self.invert else x) + (background * (1.0 - m) if (self.background or not self.empty) else 0.0)
         masks[:] = m
-        labels[:, 0], labels[:, 1], labels[:, 2] = t_s, t_c, t_t
+        labels[:, 0], labels[:, 1], labels[:, 2] = (0 if self.random else t_s), t_c, t_t
         composites, masks = routine_01(composites, masks, self.noise)
 
         return composites, labels, masks, components, hot_labels
