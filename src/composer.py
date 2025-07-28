@@ -3120,6 +3120,24 @@ class Shapes(Dataset):
     def __getitem__(self, idx):
         return self.raw_shapes[idx]
 
+
+class ManyShapes(Dataset):
+    def __init__(self,
+                 height: int = 128,
+                 width: int = 128,
+                 ):
+        super().__init__()
+        self.raw_shapes = torch.load(r"/Users/saeedida/GitProjects/bio-attention/data/many_shapes/solid.pt")
+        self.hp, self.wp = (height-64)//2, (width-64)//2
+        self.transform = transforms.Pad((self.wp, self.hp)) if self.hp > 0 else lambda x: x
+    
+    def __len__(self):
+        return len(self.raw_shapes)
+    
+    def __getitem__(self, idx):
+        i = torch.randint(0, len(self.raw_shapes), (1, )).item()
+        return self.transform(self.raw_shapes[i])
+
     def __init__(self,
                  n_iter: int = 3,  # number of iterations
                  directory: str = r"./data",  # directory of shapes
