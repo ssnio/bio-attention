@@ -6,11 +6,9 @@ from collections import OrderedDict
 import random
 # # Torch modules
 import torch
-from torch.utils.data import random_split
-from torchvision import transforms, datasets
 # # internal imports
 from prelude import save_dicts, startup_folders, get_device, save_results_to_csv
-from src.composer import ShapeSearch_MM, ShapeRecognition_MM
+from src.composer import ShapeRecognition_FBG
 from src.modelv2 import AttentionModel
 from src.utils import plot_all, plot_loss_all
 from src.utils import build_loaders, get_n_parameters
@@ -24,9 +22,10 @@ random.seed(1821)
 parser = argparse.ArgumentParser()
 parser.add_argument('-n_epochs', type=int, default=64)
 parser.add_argument('-batch_size', type=int, default=64)
-parser.add_argument('-lr', type=float, default=0.0005)
-parser.add_argument('-l2', type=float, default=5e-5)
-parser.add_argument('-exase', type=str, default="default")
+parser.add_argument('-lr', type=float, default=0.0002)
+parser.add_argument('-l2', type=float, default=1e-4)
+parser.add_argument('-res', type=int, default=1)
+parser.add_argument('-exase', type=str, default="mmrec")
 parser.add_argument('-verbose', type=int, default=1)
 argus = parser.parse_args()
 data_path = r"./data"
@@ -42,25 +41,26 @@ train_params = {
     "gamma": 0.2,
     "mask_mp": 0.0,
     "max_grad_norm": 10.0,
-    "scheduler": "CosineAnnealingLR",  # OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR, SequentialLR
+    "scheduler": "OneCycleLR",  # OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR, SequentialLR
     "optimizer": "Adam",  # "SGD", "Adam",
-    "lr_min": 1e-5,
+    "lr_min": 2e-5,
 }
 
 model_params = {
-    "channels": [8, 16, 32, 64, 128],
+    "channels": [8, 16, 32, 64],
     "fun": torch.nn.GELU(),
-    "in_dims": (3, 256, 256),
-    "mid_dim": 64,
-    "out_dim": 32,
-    "n_classes": 18,
-    "n_tasks": 2,
+    "in_dims": (3, 128, 128),
+    "mid_dim": -1,
+    "n_classes": 19,
+    "n_tasks": 1,
     "norm": "layer",
+    "out_dim": 19,
     "softness": 0.5,
     "task_fun": torch.nn.Tanh(),
     "concat": True,
-    "skip_maxpool": False,
+    "skip_maxpool": True,
     "first_k": 3,
+    "resnet": True if argus.res == 1 else False,
 }
 
 # # tasks include the composer, key, params, datasets, dataloaders, loss weights, loss slices, and has prompt
@@ -70,34 +70,20 @@ model_params = {
 # # Loss slices determine which iterations are used for the loss
 tasks = OrderedDict({})
 tasks["Recognition"] = {
-    "composer": ShapeRecognition_MM,  # composer (torch Dataset)
+    "composer": ShapeRecognition_FBG,  # composer (torch Dataset)
     "key": 0,  # key for the task
-    "params": {"n_grid": 4, "n_iter": 1, "directory": data_path},
+    "params": {"n_iter": 1, "directory": data_path},
     "datasets": [],
     "dataloaders": [],
-    "loss_w": (0.0, 0.0, 0.1),  # Loss weights for each modality
-    "loss_s": (slice(0, None), None),  # Loss slices (CE, MSE for attention)
+    "loss_w": (0.0, 0.0, 1.0),  # Loss weights for each modality
+    "loss_s": (slice(0, None), slice(0, None)),  # Loss slices (CE, MSE for attention)
     "m_slice": (slice(0, 9), slice(9, 15), slice(15, None)),
     "has_prompt": False,  # has prompt or not (only used for top-down Search)
 }
-tasks["Search"] = {
-    "composer": ShapeSearch_MM,  # composer (torch Dataset)
-    "key": 1,  # key for the task
-    "params": {"n_grid": 4, "n_iter": 3, "directory": data_path},
-    "datasets": [],
-    "dataloaders": [],
-    "loss_w": (0.0, 1.0, 0.0),  # Loss weights for each modality
-    "loss_s": (None, slice(1, None)),  # Loss slices (CE, MSE for attention)
-    "m_slice": (slice(0, 9), slice(9, 15), slice(15, None)),
-    "has_prompt": True,  # has prompt or not (only used for top-down Search)
-}
 
 results_folder, logger = startup_folders(r"./results", name=f"exp_a_{argus.exase}")
-for i, k in enumerate(tasks):
-    assert tasks[k]["key"] == i, f"Key {tasks[k]['key']} must be equal to index {i}!"
-(argus.verbose == 1) and logger.info(f"train_params\n {pformat(train_params)}")
-(argus.verbose == 1) and logger.info(f"model_params\n {pformat(model_params)}")
-(argus.verbose == 1) and logger.info(f"tasks\n {pformat(tasks)}")
+# for i, k in enumerate(tasks):
+#     assert tasks[k]["key"] == i, f"Key {tasks[k]['key']} must be equal to index {i}!"
 
 # datasets and dataloaders
 DeVice, num_workers, pin_memory = get_device()
@@ -110,10 +96,8 @@ for o in tasks:
     tasks[o]["dataloaders"] = build_loaders(tasks[o]["datasets"], batch_size=train_params["batch_size"], num_workers=num_workers, pin_memory=pin_memory)
 
 # model and optimizer...
+model_params["n_classes"] = tasks["Recognition"]["dataloaders"][0].dataset.n_classes
 model = AttentionModel(**model_params)
-(argus.verbose == 1) and logger.info(model)
-(argus.verbose == 1) and logger.info(model.map_dims)
-(argus.verbose == 1) and logger.info(f"Model has {get_n_parameters(model):,} parameters!")
 
 if train_params["optimizer"] == "SGD":
     optimizer = torch.optim.SGD(model.parameters(), lr=train_params["lr"], momentum=0.9, weight_decay=train_params["l2"])
@@ -131,11 +115,18 @@ else:
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=train_params["milestones"], gamma=train_params["gamma"])
 conductor = AttentionTrain(model, optimizer, scheduler, tasks, logger, results_folder, train_params["max_grad_norm"], False)
 
+(argus.verbose == 1) and logger.info(model)
+(argus.verbose == 1) and logger.info(model.map_dims)
+(argus.verbose == 1) and logger.info(f"Model has {get_n_parameters(model):,} parameters!")
+(argus.verbose == 1) and logger.info(f"train_params\n {pformat(train_params)}")
+(argus.verbose == 1) and logger.info(f"model_params\n {pformat(model_params)}")
+(argus.verbose == 1) and logger.info(f"tasks\n {pformat(tasks)}")
+
 # training...
 plot_all(10, model, tasks, results_folder, "_valid_pre", DeVice, logger, (argus.verbose == 1), kind = "valid")
 plot_all(10, model, tasks, results_folder, "_train_pre", DeVice, logger, (argus.verbose == 1), kind = "train")
 conductor.eval(DeVice)
-conductor.train(train_params["n_epochs"], DeVice, True)
+conductor.train(train_params["n_epochs"], DeVice, True, train_params["mask_mp"])
 plot_loss_all(conductor, results_folder)
 conductor.eval(DeVice)
 plot_all(10, model, tasks, results_folder, "_valid_post", DeVice, logger, False, kind = "valid")
