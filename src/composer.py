@@ -3084,6 +3084,42 @@ class Broken_CIFAR(Dataset):
 
 
 class ShapeRecognition_FBG(Dataset):
+class Shapes(Dataset):
+    def __init__(self,
+                 directory: str,
+                 height: int = 64,
+                 width: int = 64,
+                 pre_pad: int = 18,
+                 post_pad: int = 0,
+                 ext: bool = False,
+                 ):
+        super().__init__()
+        self.ext = ext
+        self.height, self.width, self.pre_pad, self.post_pad = height, width, pre_pad, post_pad
+        self.transform = transforms.Compose([
+            transforms.Pad(self.pre_pad) if self.pre_pad > 0 else lambda x: x,
+            transforms.Resize((self.height, self.width), antialias=True),
+            transforms.Pad(self.post_pad) if self.post_pad > 0 else lambda x: x,
+        ])
+        self.shape_names = ["trg.png", "sqr.png", "circ.png", "cross.png", "hex.png", "star.png", "heart.png", "david.png", "crs.png"]
+        if self.ext:
+            self.shape_names.append("thu.png")
+            self.shape_names.append("wu.png")
+        self.raw_shapes = self.load_shapes(directory)
+
+    def load_shapes(self, directory):
+        raw_shapes = []
+        for file in self.shape_names:
+            x = 1.0 * (transforms.ToTensor()(PILImage.open(os.path.join(directory, file)))[0])
+            raw_shapes.append(self.transform(x.unsqueeze(0)))
+        return raw_shapes
+    
+    def __len__(self):
+        return len(self.raw_shapes)
+    
+    def __getitem__(self, idx):
+        return self.raw_shapes[idx]
+
     def __init__(self,
                  n_iter: int = 3,  # number of iterations
                  directory: str = r"./data",  # directory of shapes
