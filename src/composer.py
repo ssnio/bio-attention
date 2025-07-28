@@ -3303,7 +3303,6 @@ class ShapeRecognition_MM(Dataset):
 
     def __getitem__(self, d: int):
         t_s, t_c, t_t = self.pick_target()
-        background = self.pick_hard_background(t_c, t_t) if self.superhard else self.pick_background(t_c, t_t)
         x, m, shape, color, texture = self.get_dyct(t_s, t_c, t_t)
 
         # pre-allocation
@@ -3426,6 +3425,7 @@ class ShapeRecognition_FBG(Dataset):
 
     def __getitem__(self, d: int):
         t_s, t_c, t_t = self.pick_target()
+        background = self.pick_hard_background(t_c, t_t) if self.superhard else self.pick_background(t_c, t_t)
         x, m, shape, color, texture = self.get_dyct(t_s, t_c, t_t)
 
         # pre-allocation
