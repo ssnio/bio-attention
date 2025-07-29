@@ -2268,7 +2268,8 @@ class Search_MM(Dataset):
 
         counter = 0
         if self.scase == -1:
-            scase = 0 if torch.rand(1) < 0.1 else 1 if torch.rand(1) < 0.8 else 2 if torch.rand(1) < 0.9 else 3
+            r_scase = torch.rand(())
+            scase = 0 if r_scase < 0.1 else 1 if r_scase < 0.8 else 2 if r_scase < 0.9 else 3
         else:
             scase = self.scase
         # rand_i, rand_j = torch.randperm(self.n_grid), torch.randperm(self.n_grid)
