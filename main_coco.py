@@ -1,8 +1,12 @@
-import torch
+# # built-in modules
 import os
 import argparse
 from pprint import pformat
 from collections import OrderedDict
+import random
+# # Torch modules
+import torch
+# # internal imports
 from src.composer import COCOTokens, COCOAnimals, BG20k
 from src.composer import PerceptualGrouping_COCO, Recognition_COCO, Search_COCO, SearchGrid_COCO
 from src.conductor import AttentionTrain
@@ -10,6 +14,10 @@ from src.model import AttentionModel
 from src.utils import plot_all, plot_loss_all
 from src.utils import build_loaders, get_n_parameters
 from prelude import get_device, startup_folders, save_dicts, save_results_to_csv
+
+# reproducibility
+torch.manual_seed(1980)  # Anne Treisman & Garry Gelade "A feature-integration theory of attention" (1980)
+random.seed(1980)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-n_epochs', type=int, default=42)
