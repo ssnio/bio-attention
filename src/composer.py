@@ -1001,7 +1001,7 @@ class COCOTokens:
                  animals: bool = True,
                  split: float = 0.9,
                  ):
-        from src.pycocotools.coco import COCO
+        from pycocotools.coco import COCO
         self.split = split
         self.directory = os.path.join(directory, "coco")
         self.coco = COCO(os.path.join(self.directory, "annotations/instances_train2017.json"))
@@ -1044,7 +1044,7 @@ class COCOAnimals(Dataset):
                  ):
         super().__init__()
         in_dims = in_dims if len(in_dims) == 2 else in_dims[1:]
-        from src.pycocotools.coco import COCO
+        from pycocotools.coco import COCO
         self.h, self.w = in_dims
         self.kind = kind
         self.tokens = tokens
